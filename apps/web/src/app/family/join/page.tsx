@@ -40,7 +40,7 @@ export default function FamilyJoinPage() {
     try {
       const resp = await api.post<VerifyResponse>('/api/access/verify', {
         invite_token: inviteToken,
-        verification_value: withValue ?? verificationValue || null,
+        verification_value: (withValue ?? verificationValue) || null,
       });
 
       if (resp.verified && resp.session_token) {
