@@ -1,0 +1,381 @@
+# ─────────────────────────────────────────────────────────────
+# Replica AI — production stack
+#
+# Topology:
+#   Internet ──► nginx (80/443, only public service)
+#                 │
+#                 ├──► web        (Next.js :3000)
+#                 ├──► api        (FastAPI :8000)
+#                 └──► api ──ws──► api websocket /ws/*
+#                          │
+#                          ├──► ai        (FastAPI :8100)
+#                          ├──► pgbouncer (:6432) ──► postgres :5432
+#                          ├──► redis     :6379
+#                          ├──► qdrant    :6333
+#                          └──► ollama    :11434
+#
+# All services live on the internal `replica_internal` network.
+# Only nginx is attached to `replica_public` and exposes ports 80/443.
+# ─────────────────────────────────────────────────────────────
+
+version: "3.9"
+
+x-restart: &restart unless-stopped
+
+x-logging: &logging
+  driver: "json-file"
+  options:
+    max-size: "20m"
+    max-file: "5"
+
+networks:
+  replica_public:
+    driver: bridge
+  replica_internal:
+    driver: bridge
+    internal: true   # no outbound internet for internal services
+  replica_egress:
+    driver: bridge   # for services that need outbound (api → external LLMs, ai → ollama pulls)
+
+volumes:
+  postgres_data:
+  redis_data:
+  qdrant_data:
+  ollama_data:
+  piper_data:
+  api_storage:
+  ai_storage:
+  letsencrypt:
+  certbot_www:
+  backups:
+
+services:
+  # ─── Reverse proxy / TLS termination ───────────────────
+  nginx:
+    image: nginx:1.27-alpine
+    restart: *restart
+    logging: *logging
+    depends_on:
+      web:
+        condition: service_started
+      api:
+        condition: service_started
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./nginx/conf.d:/etc/nginx/conf.d:ro
+      - ./nginx/snippets:/etc/nginx/snippets:ro
+      - letsencrypt:/etc/letsencrypt:ro
+      - certbot_www:/var/www/certbot:ro
+    networks:
+      - replica_public
+      - replica_internal
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost/healthz"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+          cpus: "0.5"
+
+  # ─── Let's Encrypt certbot ─────────────────────────────
+  certbot:
+    image: certbot/certbot:latest
+    restart: *restart
+    logging: *logging
+    volumes:
+      - letsencrypt:/etc/letsencrypt
+      - certbot_www:/var/www/certbot
+    entrypoint: >
+      /bin/sh -c 'trap exit TERM;
+      while :; do
+        certbot renew --webroot --webroot-path=/var/www/certbot --quiet;
+        sleep 12h & wait $${!};
+      done'
+    networks:
+      - replica_egress
+
+  # ─── Next.js web app ──────────────────────────────────
+  web:
+    build:
+      context: .
+      dockerfile: apps/web/Dockerfile
+    image: replica-ai/web:latest
+    restart: *restart
+    logging: *logging
+    environment:
+      NODE_ENV: production
+      NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL}
+      NEXT_TELEMETRY_DISABLED: "1"
+      PORT: "3000"
+      HOSTNAME: "0.0.0.0"
+    networks:
+      - replica_internal
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:3000/"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+          cpus: "1.0"
+
+  # ─── FastAPI backend (api) ────────────────────────────
+  api:
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+    image: replica-ai/api:latest
+    restart: *restart
+    logging: *logging
+    depends_on:
+      pgbouncer:
+        condition: service_started
+      redis:
+        condition: service_healthy
+      ai:
+        condition: service_started
+    environment:
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@pgbouncer:6432/${POSTGRES_DB}
+      REDIS_URL: redis://redis:6379/0
+      AI_SERVICE_URL: http://ai:8100
+      CORS_ORIGINS: '["${PUBLIC_BASE_URL}"]'
+      JWT_SECRET_KEY: ${JWT_SECRET_KEY}
+      ENCRYPTION_KEY: ${ENCRYPTION_KEY}
+      ENCRYPTION_MASTER_KEY: ${ENCRYPTION_MASTER_KEY}
+      DEBUG: "false"
+      HOST_URL: ${PUBLIC_BASE_URL}
+      GUNICORN_WORKERS: ${GUNICORN_WORKERS:-4}
+      GUNICORN_TIMEOUT: ${GUNICORN_TIMEOUT:-120}
+    volumes:
+      - api_storage:/app/storage
+      - backups:/backups:ro
+    networks:
+      - replica_internal
+      - replica_egress
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 60s
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+          cpus: "2.0"
+
+  # ─── FastAPI AI service ───────────────────────────────
+  ai:
+    build:
+      context: .
+      dockerfile: apps/ai/Dockerfile
+    image: replica-ai/ai:latest
+    restart: *restart
+    logging: *logging
+    depends_on:
+      qdrant:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      ollama:
+        condition: service_started
+    environment:
+      REDIS_URL: redis://redis:6379/1
+      QDRANT_HOST: qdrant
+      QDRANT_PORT: "6333"
+      OLLAMA_BASE_URL: http://ollama:11434
+      OLLAMA_DEFAULT_MODEL: ${OLLAMA_DEFAULT_MODEL:-mistral:7b-instruct}
+      GUNICORN_WORKERS: ${AI_GUNICORN_WORKERS:-2}
+      GUNICORN_TIMEOUT: ${GUNICORN_TIMEOUT:-300}
+    volumes:
+      - ai_storage:/app/storage
+    networks:
+      - replica_internal
+      - replica_egress
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8100/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 60s
+    deploy:
+      resources:
+        limits:
+          memory: 4G
+          cpus: "2.0"
+
+  # ─── PgBouncer connection pooling ─────────────────────
+  pgbouncer:
+    image: edoburu/pgbouncer:latest
+    restart: *restart
+    logging: *logging
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+      POOL_MODE: session   # session mode keeps prepared statements working with asyncpg
+      MAX_CLIENT_CONN: "200"
+      DEFAULT_POOL_SIZE: "20"
+      MIN_POOL_SIZE: "5"
+      RESERVE_POOL_SIZE: "5"
+      SERVER_RESET_QUERY: DISCARD ALL
+      AUTH_TYPE: scram-sha-256
+    networks:
+      - replica_internal
+    healthcheck:
+      test: ["CMD", "pg_isready", "-h", "localhost", "-p", "6432"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+          cpus: "0.5"
+
+  # ─── PostgreSQL ────────────────────────────────────────
+  postgres:
+    image: postgres:16-alpine
+    restart: *restart
+    logging: *logging
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_INITDB_ARGS: "--auth-host=scram-sha-256 --auth-local=scram-sha-256"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - backups:/backups
+    networks:
+      - replica_internal
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+          cpus: "2.0"
+
+  # ─── Redis (with AOF persistence) ─────────────────────
+  redis:
+    image: redis:7-alpine
+    restart: *restart
+    logging: *logging
+    command: >
+      redis-server
+      --appendonly yes
+      --appendfsync everysec
+      --maxmemory 512mb
+      --maxmemory-policy allkeys-lru
+      --requirepass ${REDIS_PASSWORD}
+    volumes:
+      - redis_data:/data
+    networks:
+      - replica_internal
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD}", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    deploy:
+      resources:
+        limits:
+          memory: 768M
+          cpus: "1.0"
+
+  # ─── Qdrant vector DB ─────────────────────────────────
+  qdrant:
+    image: qdrant/qdrant:latest
+    restart: *restart
+    logging: *logging
+    environment:
+      QDRANT__SERVICE__HTTP_PORT: "6333"
+      QDRANT__SERVICE__GRPC_PORT: "6334"
+      QDRANT__SERVICE__API_KEY: ${QDRANT_API_KEY:-}
+    volumes:
+      - qdrant_data:/qdrant/storage
+      - backups:/qdrant/snapshots
+    networks:
+      - replica_internal
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O - http://localhost:6333/healthz || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+          cpus: "2.0"
+
+  # ─── Ollama LLM runtime ───────────────────────────────
+  ollama:
+    image: ollama/ollama:latest
+    restart: *restart
+    logging: *logging
+    environment:
+      OLLAMA_HOST: "0.0.0.0"
+      OLLAMA_KEEP_ALIVE: "10m"
+    volumes:
+      - ollama_data:/root/.ollama
+    networks:
+      - replica_internal
+      - replica_egress    # needs egress to pull model weights
+    healthcheck:
+      test: ["CMD-SHELL", "ollama list || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+    deploy:
+      resources:
+        limits:
+          memory: 8G
+          cpus: "4.0"
+    # ── GPU passthrough (uncomment for NVIDIA GPU) ──
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: all
+    #           capabilities: [gpu]
+
+  # ─── Piper TTS ────────────────────────────────────────
+  piper:
+    image: rhasspy/wyoming-piper:latest
+    restart: *restart
+    logging: *logging
+    command: >
+      --voice en_US-lessac-medium
+      --data-dir /data
+      --download-dir /data
+    volumes:
+      - piper_data:/data
+    networks:
+      - replica_internal
+      - replica_egress
+    healthcheck:
+      test: ["CMD-SHELL", "nc -z localhost 10200 || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+          cpus: "1.0"

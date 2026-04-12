@@ -1,0 +1,53 @@
+# Dependencies
+node_modules/
+.pnp
+.pnp.js
+
+# Build
+dist/
+.next/
+out/
+build/
+*.tsbuildinfo
+
+# Environment
+.env
+.env.local
+.env.*.local
+CLAUDE.local.md
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+*.egg-info/
+.mypy_cache/
+.ruff_cache/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Turbo
+.turbo/
+
+# Docker
+*.log
+
+# Prisma
+packages/db/src/generated/
+
+# Testing
+coverage/
+.coverage
+htmlcov/
+.pytest_cache/

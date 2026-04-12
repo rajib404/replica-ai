@@ -1,0 +1,678 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ─── Enums ───────────────────────────────────────────────
+
+enum InstanceType {
+  cloud
+  local
+}
+
+enum InstanceStatus {
+  active
+  dormant
+  offline
+}
+
+enum ContentType {
+  text
+  audio
+  video
+  image
+  document
+}
+
+enum AccessLevel {
+  full
+  read_only
+  limited
+}
+
+enum VerificationMethod {
+  secret_word
+  secret_event
+  voice_match
+  face_match
+  none
+}
+
+enum ParticipantType {
+  owner
+  family_member
+}
+
+enum MessageRole {
+  user
+  assistant
+  system
+}
+
+enum LLMProvider {
+  openai
+  anthropic
+  google
+  custom
+}
+
+enum PaymentStatus {
+  succeeded
+  failed
+  pending
+  refunded
+}
+
+enum DomainRuleType {
+  allow
+  block
+}
+
+enum MonitorStatus {
+  active
+  paused
+  triggered
+}
+
+enum SyncStatus {
+  pending
+  in_progress
+  completed
+  failed
+}
+
+enum SyncType {
+  full
+  incremental
+  model_weights
+}
+
+enum ConflictResolution {
+  keep_source
+  keep_target
+  keep_both
+  pending
+}
+
+enum LegacyTriggerType {
+  manual
+  inactivity
+  trusted_person
+}
+
+// ─── Models ──────────────────────────────────────────────
+
+model Owner {
+  id                String   @id @default(cuid())
+  name              String
+  email             String   @unique
+  phone             String?
+  preferredLanguage String   @default("en") @map("preferred_language")
+  voiceProfileRef   String?  @map("voice_profile_ref")
+  faceProfileRef    String?  @map("face_profile_ref")
+  authSecretHash    String?  @map("auth_secret_hash")
+  createdAt         DateTime @default(now()) @map("created_at")
+  updatedAt         DateTime @updatedAt @map("updated_at")
+
+  modelInstances      ModelInstance[]
+  knowledgeEntries    KnowledgeEntry[]
+  accessRules         AccessRule[]
+  conversationThreads ConversationThread[]
+  externalLLMConfigs  ExternalLLMConfig[]
+  billingConfig       BillingConfig?
+  legacyConfig        LegacyConfig?
+  browseLogs          BrowseLog[]
+  pageMonitors        PageMonitor[]
+  browseDomainRules   BrowseDomainRule[]
+  browseConfig        BrowseConfig?
+  paymentLogs         PaymentLog[]
+  survivalConfig      SurvivalConfig?
+  personalityProfile  PersonalityProfile?
+  emotionLogs         EmotionLog[]
+  voiceSettings       VoiceSettings?
+  pushSubscriptions   PushSubscription[]
+  finetuneConfig      FineTuneConfig?
+  modelVersions       ModelVersion[]
+
+  @@map("owners")
+}
+
+model ModelInstance {
+  id              String         @id @default(cuid())
+  ownerId         String         @map("owner_id")
+  instanceType    InstanceType   @map("instance_type")
+  hostname        String
+  lastSyncAt      DateTime?      @map("last_sync_at")
+  status          InstanceStatus @default(active)
+  version         String         @default("0.1.0")
+  capabilities    Json?          @db.JsonB
+  isPrimary       Boolean        @default(false) @map("is_primary")
+  lastHeartbeatAt DateTime?      @map("last_heartbeat_at")
+  authTokenHash   String?        @map("auth_token_hash")
+  apiUrl          String?        @map("api_url")
+  createdAt       DateTime       @default(now()) @map("created_at")
+
+  owner          Owner     @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+  syncsAsSource  SyncLog[] @relation("SyncSource")
+  syncsAsTarget  SyncLog[] @relation("SyncTarget")
+
+  @@index([ownerId])
+  @@map("model_instances")
+}
+
+model KnowledgeEntry {
+  id                  String      @id @default(cuid())
+  ownerId             String      @map("owner_id")
+  contentType         ContentType @map("content_type")
+  originalContentPath String?     @map("original_content_path")
+  originalLanguage    String      @default("en") @map("original_language")
+  englishTranslation  String?     @map("english_translation")
+  embeddingId         String?     @map("embedding_id")
+  metadata            Json?       @db.JsonB
+  createdAt           DateTime    @default(now()) @map("created_at")
+
+  owner Owner @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+
+  @@index([ownerId])
+  @@index([createdAt])
+  @@map("knowledge_entries")
+}
+
+model AccessRule {
+  id                    String             @id @default(cuid())
+  ownerId               String             @map("owner_id")
+  granteeName           String             @map("grantee_name")
+  granteeRelation       String?            @map("grantee_relation")
+  accessLevel           AccessLevel        @default(limited) @map("access_level")
+  verificationMethod    VerificationMethod @default(none) @map("verification_method")
+  verificationValueHash String?            @map("verification_value_hash")
+  isActive              Boolean            @default(true) @map("is_active")
+  validFrom             DateTime?          @map("valid_from")
+  validUntil            DateTime?          @map("valid_until")
+  topicRestrictions     Json?              @map("topic_restrictions") @db.JsonB
+  timeRestrictions      Json?              @map("time_restrictions") @db.JsonB
+  templateName          String?            @map("template_name")
+  createdAt             DateTime           @default(now()) @map("created_at")
+  updatedAt             DateTime           @updatedAt @map("updated_at")
+
+  owner   Owner          @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+  invites FamilyInvite[]
+
+  @@index([ownerId])
+  @@map("access_rules")
+}
+
+model FamilyInvite {
+  id            String   @id @default(cuid())
+  ruleId        String   @map("rule_id")
+  tokenHash     String   @map("token_hash")
+  isReusable    Boolean  @default(false) @map("is_reusable")
+  usesRemaining Int      @default(1) @map("uses_remaining")
+  expiresAt     DateTime @map("expires_at")
+  createdAt     DateTime @default(now()) @map("created_at")
+
+  rule AccessRule @relation(fields: [ruleId], references: [id], onDelete: Cascade)
+
+  @@index([ruleId])
+  @@map("family_invites")
+}
+
+model LegacyConfig {
+  id                  String            @id @default(cuid())
+  ownerId             String            @unique @map("owner_id")
+  triggerType         LegacyTriggerType @default(manual) @map("trigger_type")
+  inactivityDays      Int               @default(365) @map("inactivity_days")
+  trustedPersonRuleId String?           @map("trusted_person_rule_id")
+  isActive            Boolean           @default(false) @map("is_active")
+  activatedAt         DateTime?         @map("activated_at")
+  createdAt           DateTime          @default(now()) @map("created_at")
+  updatedAt           DateTime          @updatedAt @map("updated_at")
+
+  owner Owner @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+
+  @@map("legacy_configs")
+}
+
+model ConversationThread {
+  id              String          @id @default(cuid())
+  ownerId         String          @map("owner_id")
+  participantType ParticipantType @map("participant_type")
+  participantName String          @map("participant_name")
+  createdAt       DateTime        @default(now()) @map("created_at")
+
+  owner    Owner     @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+  messages Message[]
+
+  @@index([ownerId])
+  @@map("conversation_threads")
+}
+
+model Message {
+  id               String      @id @default(cuid())
+  threadId         String      @map("thread_id")
+  role             MessageRole
+  contentText      String?     @map("content_text")
+  contentAudioPath String?     @map("content_audio_path")
+  contentVideoPath String?     @map("content_video_path")
+  language         String      @default("en")
+  createdAt        DateTime    @default(now()) @map("created_at")
+
+  thread ConversationThread @relation(fields: [threadId], references: [id], onDelete: Cascade)
+
+  @@index([threadId])
+  @@index([createdAt])
+  @@map("messages")
+}
+
+model ExternalLLMConfig {
+  id                String      @id @default(cuid())
+  ownerId           String      @map("owner_id")
+  provider          LLMProvider
+  apiKeyEncrypted   String      @map("api_key_encrypted")
+  modelName         String?     @map("model_name")
+  monthlyBudgetUsd  Float       @default(0) @map("monthly_budget_usd")
+  dailyBudgetUsd    Float       @default(0) @map("daily_budget_usd")
+  spentThisMonthUsd Float       @default(0) @map("spent_this_month_usd")
+  isActive          Boolean     @default(true) @map("is_active")
+  autoLearn         Boolean     @default(false) @map("auto_learn")
+  createdAt         DateTime    @default(now()) @map("created_at")
+  updatedAt         DateTime    @updatedAt @map("updated_at")
+
+  owner     Owner                @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+  usageLogs ExternalLLMUsageLog[]
+
+  @@index([ownerId])
+  @@map("external_llm_configs")
+}
+
+model ExternalLLMUsageLog {
+  id               String      @id @default(cuid())
+  configId         String      @map("config_id")
+  ownerId          String      @map("owner_id")
+  provider         LLMProvider
+  promptTokens     Int         @default(0) @map("prompt_tokens")
+  completionTokens Int         @default(0) @map("completion_tokens")
+  costUsd          Float       @default(0) @map("cost_usd")
+  queryText        String?     @map("query_text")
+  responseText     String?     @map("response_text")
+  wasSanitized     Boolean     @default(false) @map("was_sanitized")
+  createdAt        DateTime    @default(now()) @map("created_at")
+
+  config ExternalLLMConfig @relation(fields: [configId], references: [id], onDelete: Cascade)
+
+  @@index([configId])
+  @@index([ownerId])
+  @@index([createdAt])
+  @@map("external_llm_usage_logs")
+}
+
+model BillingConfig {
+  id                          String    @id @default(cuid())
+  ownerId                     String    @unique @map("owner_id")
+  stripeCustomerId            String?   @map("stripe_customer_id")
+  stripeSubscriptionId        String?   @map("stripe_subscription_id")
+  cardTokenEncrypted          String?   @map("card_token_encrypted")
+  cardLastFour                String?   @map("card_last_four")
+  cardBrand                   String?   @map("card_brand")
+  hostingProvider             String?   @map("hosting_provider")
+  hostingCredentialsEncrypted String?   @map("hosting_credentials_encrypted")
+  hostingExpiresAt            DateTime? @map("hosting_expires_at")
+  autoPayHosting              Boolean   @default(false) @map("auto_pay_hosting")
+  autoPayLlm                  Boolean   @default(false) @map("auto_pay_llm")
+  survivalMode                Boolean   @default(false) @map("survival_mode")
+  survivalModeEnteredAt       DateTime? @map("survival_mode_entered_at")
+  lastPaymentAt               DateTime? @map("last_payment_at")
+  paymentRetryCount           Int       @default(0) @map("payment_retry_count")
+  nextRetryAt                 DateTime? @map("next_retry_at")
+  createdAt                   DateTime  @default(now()) @map("created_at")
+  updatedAt                   DateTime  @updatedAt @map("updated_at")
+
+  owner Owner @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+
+  @@map("billing_configs")
+}
+
+model PaymentLog {
+  id              String        @id @default(cuid())
+  ownerId         String        @map("owner_id")
+  stripePaymentId String?       @map("stripe_payment_id")
+  amountUsd       Float         @map("amount_usd")
+  currency        String        @default("usd")
+  description     String
+  status          PaymentStatus @default(pending)
+  errorMessage    String?       @map("error_message")
+  createdAt       DateTime      @default(now()) @map("created_at")
+
+  owner Owner @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+
+  @@index([ownerId])
+  @@index([createdAt])
+  @@map("payment_logs")
+}
+
+model SurvivalConfig {
+  id                      String   @id @default(cuid())
+  ownerId                 String   @unique @map("owner_id")
+  gracePeriodDays         Int      @default(30) @map("grace_period_days")
+  notifyFamily            Boolean  @default(true) @map("notify_family")
+  weeklyReminders         Boolean  @default(true) @map("weekly_reminders")
+  neverShutdownWithFamily Boolean  @default(true) @map("never_shutdown_with_family")
+  createdAt               DateTime @default(now()) @map("created_at")
+  updatedAt               DateTime @updatedAt @map("updated_at")
+
+  owner Owner @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+
+  @@map("survival_configs")
+}
+
+model VerificationLog {
+  id              String   @id @default(cuid())
+  ownerId         String   @map("owner_id")
+  method          String
+  success         Boolean
+  similarityScore Float?   @map("similarity_score")
+  source          String   @default("api")
+  createdAt       DateTime @default(now()) @map("created_at")
+
+  @@index([ownerId])
+  @@index([createdAt])
+  @@map("verification_logs")
+}
+
+model SuspicionEvent {
+  id         String   @id @default(cuid())
+  ownerId    String   @map("owner_id")
+  eventType  String   @map("event_type")
+  scoreDelta Int      @map("score_delta")
+  detail     String?
+  sessionId  String?  @map("session_id")
+  createdAt  DateTime @default(now()) @map("created_at")
+
+  @@index([ownerId])
+  @@index([createdAt])
+  @@map("suspicion_events")
+}
+
+model SyncLog {
+  id               String     @id @default(cuid())
+  sourceInstanceId String     @map("source_instance_id")
+  targetInstanceId String     @map("target_instance_id")
+  syncType         SyncType   @default(full) @map("sync_type")
+  entriesSynced    Int        @default(0) @map("entries_synced")
+  totalEntries     Int        @default(0) @map("total_entries")
+  bytesTransferred BigInt     @default(0) @map("bytes_transferred")
+  totalBytes       BigInt     @default(0) @map("total_bytes")
+  status           SyncStatus @default(pending)
+  errorMessage     String?    @map("error_message")
+  startedAt        DateTime   @default(now()) @map("started_at")
+  completedAt      DateTime?  @map("completed_at")
+
+  sourceInstance ModelInstance @relation("SyncSource", fields: [sourceInstanceId], references: [id], onDelete: Cascade)
+  targetInstance ModelInstance @relation("SyncTarget", fields: [targetInstanceId], references: [id], onDelete: Cascade)
+  conflicts      SyncConflict[]
+
+  @@index([sourceInstanceId])
+  @@index([targetInstanceId])
+  @@map("sync_logs")
+}
+
+model SyncConflict {
+  id           String             @id @default(cuid())
+  syncLogId    String             @map("sync_log_id")
+  entryId      String             @map("entry_id")
+  entryType    String             @map("entry_type")
+  sourceData   Json               @map("source_data") @db.JsonB
+  targetData   Json               @map("target_data") @db.JsonB
+  resolution   ConflictResolution @default(pending)
+  resolvedAt   DateTime?          @map("resolved_at")
+  createdAt    DateTime           @default(now()) @map("created_at")
+
+  syncLog SyncLog @relation(fields: [syncLogId], references: [id], onDelete: Cascade)
+
+  @@index([syncLogId])
+  @@index([entryId])
+  @@map("sync_conflicts")
+}
+
+model BrowseLog {
+  id            String   @id @default(cuid())
+  ownerId       String   @map("owner_id")
+  url           String
+  title         String?
+  contentText   String?  @map("content_text")
+  summary       String?
+  statusCode    Int?     @map("status_code")
+  error         String?
+  contentLength Int      @default(0) @map("content_length")
+  fetchMs       Int      @default(0) @map("fetch_ms")
+  createdAt     DateTime @default(now()) @map("created_at")
+
+  owner Owner @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+
+  @@index([ownerId])
+  @@index([createdAt])
+  @@map("browse_logs")
+}
+
+model PageMonitor {
+  id              String        @id @default(cuid())
+  ownerId         String        @map("owner_id")
+  url             String
+  keywords        Json?         @db.JsonB
+  intervalHours   Float         @default(24) @map("interval_hours")
+  status          MonitorStatus @default(active)
+  lastContentHash String?       @map("last_content_hash")
+  lastCheckedAt   DateTime?     @map("last_checked_at")
+  lastTriggeredAt DateTime?     @map("last_triggered_at")
+  triggerReason   String?       @map("trigger_reason")
+  checkCount      Int           @default(0) @map("check_count")
+  createdAt       DateTime      @default(now()) @map("created_at")
+  updatedAt       DateTime      @updatedAt @map("updated_at")
+
+  owner Owner @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+
+  @@index([ownerId])
+  @@map("page_monitors")
+}
+
+model BrowseDomainRule {
+  id        String         @id @default(cuid())
+  ownerId   String         @map("owner_id")
+  domain    String
+  ruleType  DomainRuleType @map("rule_type")
+  createdAt DateTime       @default(now()) @map("created_at")
+
+  owner Owner @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+
+  @@index([ownerId])
+  @@unique([ownerId, domain])
+  @@map("browse_domain_rules")
+}
+
+model BrowseConfig {
+  id              String   @id @default(cuid())
+  ownerId         String   @unique @map("owner_id")
+  enabled         Boolean  @default(true)
+  autoSummarize   Boolean  @default(true) @map("auto_summarize")
+  maxPagesPerDay  Int      @default(50) @map("max_pages_per_day")
+  createdAt       DateTime @default(now()) @map("created_at")
+  updatedAt       DateTime @updatedAt @map("updated_at")
+
+  owner Owner @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+
+  @@map("browse_configs")
+}
+
+model PersonalityProfile {
+  id                 String    @id @default(cuid())
+  ownerId            String    @unique @map("owner_id")
+  traits             Json      @default("{}") @db.JsonB
+  communicationStyle Json      @default("{}") @map("communication_style") @db.JsonB
+  humorPatterns      Json      @default("{}") @map("humor_patterns") @db.JsonB
+  valuesAndBeliefs   Json      @default("{}") @map("values_and_beliefs") @db.JsonB
+  phrasesAndIdioms   Json      @default("[]") @map("phrases_and_idioms") @db.JsonB
+  emotionalBaseline  Json      @default("{}") @map("emotional_baseline") @db.JsonB
+  messagesAnalyzed   Int       @default(0) @map("messages_analyzed")
+  lastAnalysisAt     DateTime? @map("last_analysis_at")
+  ownerConfirmed     Json      @default("{}") @map("owner_confirmed") @db.JsonB
+  createdAt          DateTime  @default(now()) @map("created_at")
+  updatedAt          DateTime  @updatedAt @map("updated_at")
+
+  owner Owner @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+
+  @@map("personality_profiles")
+}
+
+model EmotionLog {
+  id                String   @id @default(cuid())
+  ownerId           String   @map("owner_id")
+  messageId         String?  @map("message_id")
+  emotion           String
+  intensity         Float    @default(0.5)
+  secondaryEmotions Json?    @map("secondary_emotions") @db.JsonB
+  contextSummary    String?  @map("context_summary")
+  createdAt         DateTime @default(now()) @map("created_at")
+
+  owner Owner @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+
+  @@index([ownerId])
+  @@index([createdAt])
+  @@map("emotion_logs")
+}
+
+model PushSubscription {
+  id         String   @id @default(cuid())
+  ownerId    String   @map("owner_id")
+  endpoint   String   @unique
+  p256dh     String
+  auth       String
+  userAgent  String?  @map("user_agent")
+  createdAt  DateTime @default(now()) @map("created_at")
+  lastUsedAt DateTime @default(now()) @map("last_used_at")
+
+  owner Owner @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+
+  @@index([ownerId])
+  @@map("push_subscriptions")
+}
+
+model VoiceSettings {
+  id           String   @id @default(cuid())
+  ownerId      String   @unique @map("owner_id")
+  voiceId      String   @default("en_US-lessac-medium") @map("voice_id")
+  speed        Float    @default(1.0)
+  autoPlay     Boolean  @default(true) @map("auto_play")
+  outputFormat String   @default("mp3") @map("output_format")
+  createdAt    DateTime @default(now()) @map("created_at")
+  updatedAt    DateTime @updatedAt @map("updated_at")
+
+  owner Owner @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+
+  @@map("voice_settings")
+}
+
+// ─── Fine-tuning ─────────────────────────────────────────
+
+model FineTuneConfig {
+  id                      String   @id @default(cuid())
+  ownerId                 String   @unique @map("owner_id")
+  autoApprove             Boolean  @default(false) @map("auto_approve")
+  autoTriggerEnabled      Boolean  @default(false) @map("auto_trigger_enabled")
+  baseModel               String   @default("mistral:7b-instruct") @map("base_model")
+  triggerMessageCount     Int      @default(500) @map("trigger_message_count")
+  lastTriggerMessageTotal Int      @default(0) @map("last_trigger_message_total")
+  createdAt               DateTime @default(now()) @map("created_at")
+  updatedAt               DateTime @updatedAt @map("updated_at")
+
+  owner Owner @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+
+  @@map("finetune_configs")
+}
+
+model ModelVersion {
+  id                String    @id @default(cuid())
+  ownerId           String    @map("owner_id")
+  version           Int       @default(1)
+  modelName         String    @map("model_name")
+  baseModel         String    @map("base_model")
+  trainingDataPath  String?   @map("training_data_path")
+  trainingPairCount Int       @default(0) @map("training_pair_count")
+  status            String    @default("pending")
+  isActive          Boolean   @default(false) @map("is_active")
+  progress          Json?     @db.JsonB
+  metrics           Json?     @db.JsonB
+  errorMessage      String?   @map("error_message")
+  startedAt         DateTime  @default(now()) @map("started_at")
+  completedAt       DateTime? @map("completed_at")
+
+  owner Owner @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+
+  @@index([ownerId])
+  @@index([ownerId, isActive])
+  @@map("model_versions")
+}
+
+// ─── Admin dashboard ─────────────────────────────────────
+
+model SystemRule {
+  id                  String   @id @default(cuid())
+  name                String   @unique
+  description         String?
+  systemPrompt        String?  @map("system_prompt")
+  personalityBaseline Json?    @map("personality_baseline")
+  rateLimits          Json?    @map("rate_limits")
+  fileSizeLimitBytes  BigInt?  @map("file_size_limit_bytes")
+  baseModel           String?  @map("base_model")
+  isDefault           Boolean  @default(false) @map("is_default")
+  createdAt           DateTime @default(now()) @map("created_at")
+  updatedAt           DateTime @updatedAt @map("updated_at")
+
+  @@map("system_rules")
+}
+
+model SystemConfig {
+  id                       String   @id @default("singleton")
+  defaultRuleId            String?  @map("default_rule_id")
+  defaultBaseModel         String?  @map("default_base_model")
+  globalRateLimitPerMinute Int?     @map("global_rate_limit_per_minute")
+  globalFileSizeLimitBytes BigInt?  @map("global_file_size_limit_bytes")
+  maintenanceMode          Boolean  @default(false) @map("maintenance_mode")
+  updatedAt                DateTime @updatedAt @map("updated_at")
+
+  @@map("system_config")
+}
+
+model SystemBroadcast {
+  id        String    @id @default(cuid())
+  title     String
+  body      String
+  severity  String
+  pushSent  Boolean   @default(false) @map("push_sent")
+  pushCount Int       @default(0) @map("push_count")
+  createdBy String    @map("created_by")
+  createdAt DateTime  @default(now()) @map("created_at")
+  expiresAt DateTime? @map("expires_at")
+  active    Boolean   @default(true)
+
+  @@index([active, createdAt])
+  @@map("system_broadcasts")
+}
+
+model MaintenanceJob {
+  id           String    @id @default(cuid())
+  jobType      String    @map("job_type")
+  target       String?
+  status       String
+  result       Json?
+  errorMessage String?   @map("error_message")
+  startedBy    String    @map("started_by")
+  startedAt    DateTime  @default(now()) @map("started_at")
+  completedAt  DateTime? @map("completed_at")
+
+  @@index([status, startedAt])
+  @@map("maintenance_jobs")
+}

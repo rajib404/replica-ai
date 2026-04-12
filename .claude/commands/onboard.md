@@ -1,0 +1,1 @@
+Read the CLAUDE.md and docs/architecture.md to understand the project structure. Then summarize the current state: which packages exist, what's implemented, and what's next on the implementation plan.

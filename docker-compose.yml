@@ -1,0 +1,93 @@
+version: "3.9"
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+      POSTGRES_DB: ${POSTGRES_DB:-replica_ai}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  qdrant:
+    image: qdrant/qdrant:latest
+    restart: unless-stopped
+    ports:
+      - "${QDRANT_PORT:-6333}:6333"
+      - "${QDRANT_GRPC_PORT:-6334}:6334"
+    volumes:
+      - qdrant_data:/qdrant/storage
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:6333/healthz"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  ollama:
+    image: ollama/ollama:latest
+    restart: unless-stopped
+    ports:
+      - "${OLLAMA_PORT:-11434}:11434"
+    environment:
+      OLLAMA_HOST: "0.0.0.0"
+    volumes:
+      - ollama_data:/root/.ollama
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:11434/"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    # ── GPU passthrough (uncomment for NVIDIA GPU) ──
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: all
+    #           capabilities: [gpu]
+
+  piper:
+    image: rhasspy/wyoming-piper:latest
+    restart: unless-stopped
+    ports:
+      - "${PIPER_PORT:-10200}:10200"
+    command: >
+      --voice en_US-lessac-medium
+      --data-dir /data
+      --download-dir /data
+    volumes:
+      - piper_data:/data
+    healthcheck:
+      test: ["CMD", "nc", "-z", "localhost", "10200"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  postgres_data:
+  redis_data:
+  qdrant_data:
+  ollama_data:
+  piper_data:
