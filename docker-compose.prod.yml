@@ -144,7 +144,7 @@ services:
       ai:
         condition: service_started
     environment:
-      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@pgbouncer:6432/${POSTGRES_DB}
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@pgbouncer:5432/${POSTGRES_DB}
       REDIS_URL: redis://redis:6379/0
       AI_SERVICE_URL: http://ai:8100
       CORS_ORIGINS: '["${PUBLIC_BASE_URL}"]'
@@ -233,7 +233,7 @@ services:
     networks:
       - replica_internal
     healthcheck:
-      test: ["CMD", "pg_isready", "-h", "localhost", "-p", "6432"]
+      test: ["CMD", "pg_isready", "-h", "localhost", "-p", "5432"]
       interval: 10s
       timeout: 5s
       retries: 5
