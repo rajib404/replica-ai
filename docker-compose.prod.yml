@@ -312,7 +312,7 @@ services:
     networks:
       - replica_internal
     healthcheck:
-      test: ["CMD-SHELL", "wget -q -O - http://localhost:6333/healthz || exit 1"]
+      test: ["CMD-SHELL", "curl -fsS http://localhost:6333/healthz || exit 1"]
       interval: 15s
       timeout: 5s
       retries: 5
