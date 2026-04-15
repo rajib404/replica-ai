@@ -145,7 +145,7 @@ services:
         condition: service_started
     environment:
       DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@pgbouncer:5432/${POSTGRES_DB}
-      REDIS_URL: redis://redis:6379/0
+      REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379/0
       AI_SERVICE_URL: http://ai:8100
       CORS_ORIGINS: '["${PUBLIC_BASE_URL}"]'
       JWT_SECRET_KEY: ${JWT_SECRET_KEY}
@@ -189,7 +189,7 @@ services:
       ollama:
         condition: service_started
     environment:
-      REDIS_URL: redis://redis:6379/1
+      REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379/1
       QDRANT_HOST: qdrant
       QDRANT_PORT: "6333"
       OLLAMA_BASE_URL: http://ollama:11434
