@@ -35,6 +35,7 @@ dependencies = [
     "py-vapid>=1.9.0",
     "psutil>=5.9.0",
     "python-magic>=0.4.27",
+    "cuid2>=2.0.0",
 ]
 
 [project.optional-dependencies]
