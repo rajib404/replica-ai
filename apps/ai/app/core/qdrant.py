@@ -20,16 +20,19 @@ logger = logging.getLogger(__name__)
 class QdrantService:
     """Async wrapper around the Qdrant vector database."""
 
-    def __init__(self, host: str | None = None, port: int | None = None) -> None:
+    def __init__(self, host: str | None = None, port: int | None = None, api_key: str | None = None) -> None:
         self._host = host or settings.qdrant_host
         self._port = port or settings.qdrant_port
+        self._api_key = api_key or settings.qdrant_api_key
         self._client: AsyncQdrantClient | None = None
         self._collection_ready = False
         self._indexes_ready = False
 
     async def _get_client(self) -> AsyncQdrantClient:
         if self._client is None:
-            self._client = AsyncQdrantClient(host=self._host, port=self._port)
+            self._client = AsyncQdrantClient(
+                host=self._host, port=self._port, api_key=self._api_key,
+            )
         return self._client
 
     async def ensure_collection(self, vector_size: int) -> None:

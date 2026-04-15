@@ -13,6 +13,7 @@ class Settings(BaseSettings):
     # Qdrant
     qdrant_host: str = "localhost"
     qdrant_port: int = 6333
+    qdrant_api_key: str | None = None
     qdrant_collection_name: str = "knowledge"
 
     # Redis (shared with main API for task tracking)
