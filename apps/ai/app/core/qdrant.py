@@ -31,7 +31,7 @@ class QdrantService:
     async def _get_client(self) -> AsyncQdrantClient:
         if self._client is None:
             self._client = AsyncQdrantClient(
-                host=self._host, port=self._port, api_key=self._api_key,
+                host=self._host, port=self._port, api_key=self._api_key, https=False,
             )
         return self._client
 
