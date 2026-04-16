@@ -138,6 +138,15 @@ else
     chmod 600 "$ENV_FILE"
     log "Wrote $ENV_FILE (mode 600, root-owned)"
 
+    # ── Pick an Ollama default model based on host RAM ──
+    TOTAL_RAM_MB=$(awk '/MemTotal/ {print int($2/1024)}' /proc/meminfo)
+    if   [[ $TOTAL_RAM_MB -ge 16000 ]]; then OLLAMA_MODEL="mistral:7b-instruct"
+    elif [[ $TOTAL_RAM_MB -ge 12000 ]]; then OLLAMA_MODEL="qwen2.5:3b"
+    else                                     OLLAMA_MODEL="gemma2:2b"
+    fi
+    log "Detected ${TOTAL_RAM_MB}MB RAM → OLLAMA_DEFAULT_MODEL=$OLLAMA_MODEL"
+    sed -i "s|^OLLAMA_DEFAULT_MODEL=.*|OLLAMA_DEFAULT_MODEL=$OLLAMA_MODEL|" "$ENV_FILE"
+
     cat <<EOF
 
   ╔═══════════════════════════════════════════════════════════╗
@@ -151,6 +160,14 @@ else
 
 EOF
     confirm "Have you saved the master key?"
+fi
+
+# Symlink .env -> .env.production so plain `docker compose` commands
+# (without --env-file) also pick up the production environment.
+if [[ ! -L "$REPO_ROOT/.env" || "$(readlink "$REPO_ROOT/.env")" != ".env.production" ]]; then
+    log "Creating .env symlink → .env.production"
+    rm -f "$REPO_ROOT/.env"
+    ln -s .env.production "$REPO_ROOT/.env"
 fi
 
 # Source for use below
@@ -224,11 +241,25 @@ fi
 # ─── 8. Start certbot renewal loop ───────────────────────
 docker compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE" up -d certbot
 
+# ─── 8b. Pull the default Ollama model ───────────────────
+log "Pulling Ollama model: $OLLAMA_DEFAULT_MODEL (this can take several minutes)…"
+docker compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE" exec -T ollama \
+    ollama pull "$OLLAMA_DEFAULT_MODEL" \
+    || warn "Ollama model pull failed — run manually: docker compose exec ollama ollama pull $OLLAMA_DEFAULT_MODEL"
+
 # ─── 9. Health check ─────────────────────────────────────
 log "Waiting for services to settle…"
 sleep 10
 
 docker compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE" ps
+
+# Check the API's detailed health endpoint and warn on degraded services
+log "Checking detailed health…"
+HEALTH=$(docker compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE" exec -T api \
+    curl -fsS http://localhost:8000/api/health/detailed 2>/dev/null || echo '{}')
+echo "$HEALTH" | grep -q '"status":"ok"' \
+    && log "✓ All services healthy" \
+    || warn "Some services degraded — see /api/health/detailed"
 
 cat <<EOF
 
@@ -242,9 +273,9 @@ cat <<EOF
   ║   Monitoring: add scripts/monitor.sh to root crontab       ║
   ║                                                             ║
   ║   Don't forget to:                                          ║
+  ║     - Point DNS A record for $DOMAIN
+  ║       to this server's public IP                            ║
   ║     - sudo ufw enable (allow 80/tcp, 443/tcp, OpenSSH)     ║
-  ║     - Pull Ollama models: docker compose exec ollama \\     ║
-  ║         ollama pull mistral:7b-instruct                     ║
   ╚═══════════════════════════════════════════════════════════╝
 
 EOF
