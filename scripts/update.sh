@@ -81,7 +81,7 @@ if [[ $SKIP_MIGRATE -eq 0 ]]; then
             -w /workspace/packages/db \
             -e DATABASE_URL="postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}" \
             node:20-alpine \
-            sh -c "npx --yes prisma@latest migrate deploy")
+            sh -c "npx --yes prisma@5 migrate deploy")
         docker network connect "${NET_PREFIX}_replica_internal" "$MIGRATE_CID"
         docker network connect "${NET_PREFIX}_replica_egress"   "$MIGRATE_CID"
         docker start -a "$MIGRATE_CID"
