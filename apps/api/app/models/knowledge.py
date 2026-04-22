@@ -73,7 +73,7 @@ class KnowledgeEntryResponse(BaseModel):
     original_language: str | None = None
     english_translation: str | None = None
     embedding_id: str | None = None
-    metadata_: dict | None = Field(None, alias="metadata")
+    metadata_: dict | None = Field(None, serialization_alias="metadata")
     created_at: datetime
 
     model_config = {"from_attributes": True, "populate_by_name": True}
