@@ -82,7 +82,7 @@ if [[ $SKIP_MIGRATE -eq 0 ]]; then
             -w /workspace/packages/db \
             -e DATABASE_URL="postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}" \
             node:20-alpine \
-            sh -c "npx --yes prisma@latest migrate deploy" \
+            sh -c "/workspace/node_modules/.bin/prisma migrate deploy" \
             || fail "Migrations failed — aborting update"
     fi
 fi
