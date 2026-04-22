@@ -75,15 +75,19 @@ dc build --pull web api ai
 if [[ $SKIP_MIGRATE -eq 0 ]]; then
     log "Running database migrations…"
     if [[ -d "$REPO_ROOT/packages/db" ]]; then
-        NETWORK_NAME="$(basename "$REPO_ROOT")_replica_internal"
-        docker run --rm \
-            --network "$NETWORK_NAME" \
+        NET_PREFIX="$(basename "$REPO_ROOT")"
+        MIGRATE_CID=$(docker create \
             -v "$REPO_ROOT:/workspace" \
             -w /workspace/packages/db \
             -e DATABASE_URL="postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}" \
             node:20-alpine \
-            sh -c "/workspace/node_modules/.bin/prisma migrate deploy" \
-            || fail "Migrations failed — aborting update"
+            sh -c "npx --yes prisma@latest migrate deploy")
+        docker network connect "${NET_PREFIX}_replica_internal" "$MIGRATE_CID"
+        docker network connect "${NET_PREFIX}_replica_egress"   "$MIGRATE_CID"
+        docker start -a "$MIGRATE_CID"
+        MIGRATE_EXIT=$?
+        docker rm "$MIGRATE_CID" >/dev/null 2>&1
+        [[ $MIGRATE_EXIT -eq 0 ]] || fail "Migrations failed — aborting update"
     fi
 fi
 
