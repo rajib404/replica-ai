@@ -158,6 +158,31 @@ All phases complete. v1.0.0 tagged 2026-04-09.
 - **Security:** 2FA (TOTP), AES-256-GCM encryption at rest, audit logging, per-category rate limiting, MIME validation, security headers, data export/deletion
 - **Infrastructure:** Docker prod stack (10 services), nginx, PgBouncer, Let's Encrypt, CI/CD, deploy scripts, backup/restore
 
+## Production Operations
+
+### Always pass `--env-file` with docker compose on production
+
+The production secrets live in `.env.production`. Docker compose does **not** load it automatically — it only auto-loads a file literally named `.env`. The deploy/update scripts pass `--env-file` explicitly, but bare manual commands do not.
+
+**Always run manual docker compose commands like this:**
+```bash
+docker compose -f /opt/replica-ai/docker-compose.prod.yml --env-file /opt/replica-ai/.env.production <command>
+```
+
+Running without `--env-file` causes services to start with wrong or missing secrets (e.g. `QDRANT_API_KEY` resolves to empty string), which leads to auth failures between containers even though `.env.production` looks correct.
+
+This applies to: `up`, `up --force-recreate`, `restart`, `exec`, `logs`, `ps`, `down` — any command where the correct env matters for the operation or the resulting container state.
+
+### Running migrations on production
+
+Migrations must be created locally first, then deployed:
+
+1. **Locally:** `make db-migrate` (runs `prisma migrate dev`) — generates the SQL file in `packages/db/prisma/migrations/`
+2. **Commit & push** the migration file
+3. **On server:** `sudo ./scripts/update.sh` — applies migrations via `prisma migrate deploy` and does a rolling restart
+
+Never run `prisma migrate dev` on production (it can reset the database). The `update.sh` script uses `migrate deploy` which only applies pending migrations safely.
+
 ## References
 
 @docs/architecture.md
