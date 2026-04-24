@@ -9,8 +9,12 @@ export const ENDPOINTS = {
   CHAT_THREAD_MESSAGES: (id: string) => `/api/chat/threads/${id}/messages`,
 
   // Knowledge
-  KNOWLEDGE_INGEST: "/api/knowledge/ingest",
+  KNOWLEDGE_INGEST_TEXT: "/api/knowledge/text",
+  KNOWLEDGE_INGEST_AUDIO: "/api/knowledge/audio",
+  KNOWLEDGE_INGEST_VIDEO: "/api/knowledge/video",
+  KNOWLEDGE_INGEST_DOCUMENT: "/api/knowledge/document",
   KNOWLEDGE_ENTRIES: "/api/knowledge/entries",
+  KNOWLEDGE_ENTRY_FILE: (id: string) => `/api/knowledge/entries/${id}/file`,
   KNOWLEDGE_ENTRY_DELETE: (id: string) => `/api/knowledge/entries/${id}`,
 
   // Personality / Learning

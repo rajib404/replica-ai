@@ -106,7 +106,7 @@ export default function ChatScreen() {
       setUploading(true);
       const form = new FormData();
       form.append("file", { uri: file.uri, name: file.name, type: file.mimeType ?? "application/octet-stream" } as any);
-      await apiClient.post(ENDPOINTS.KNOWLEDGE_INGEST, form, {
+      await apiClient.post(ENDPOINTS.KNOWLEDGE_INGEST_DOCUMENT, form, {
         headers: { "Content-Type": "multipart/form-data" },
       });
       Alert.alert("Uploaded", `"${file.name}" added to knowledge base.`);
@@ -135,7 +135,7 @@ export default function ChatScreen() {
       const name = asset.fileName ?? (isVideo ? "video.mp4" : "image.jpg");
       const mime = isVideo ? "video/mp4" : "image/jpeg";
       form.append("file", { uri: asset.uri, name, type: mime } as any);
-      const endpoint = isVideo ? ENDPOINTS.KNOWLEDGE_INGEST : ENDPOINTS.KNOWLEDGE_INGEST;
+      const endpoint = isVideo ? ENDPOINTS.KNOWLEDGE_INGEST_VIDEO : ENDPOINTS.KNOWLEDGE_INGEST_DOCUMENT;
       await apiClient.post(endpoint, form, { headers: { "Content-Type": "multipart/form-data" } });
       Alert.alert("Uploaded", `${isVideo ? "Video" : "Image"} added to knowledge base.`);
     } catch (e: any) {
@@ -157,7 +157,7 @@ export default function ChatScreen() {
       try {
         const form = new FormData();
         form.append("file", { uri, name: "voice.m4a", type: "audio/m4a" } as any);
-        await apiClient.post(ENDPOINTS.KNOWLEDGE_INGEST, form, {
+        await apiClient.post(ENDPOINTS.KNOWLEDGE_INGEST_AUDIO, form, {
           headers: { "Content-Type": "multipart/form-data" },
         });
         Alert.alert("Uploaded", "Voice note added to knowledge base.");
@@ -198,7 +198,7 @@ export default function ChatScreen() {
     try {
       const form = new FormData();
       form.append("file", { uri: asset.uri, name: "recording.mp4", type: "video/mp4" } as any);
-      await apiClient.post(ENDPOINTS.KNOWLEDGE_INGEST, form, {
+      await apiClient.post(ENDPOINTS.KNOWLEDGE_INGEST_VIDEO, form, {
         headers: { "Content-Type": "multipart/form-data" },
       });
       Alert.alert("Uploaded", "Video added to knowledge base.");

@@ -1,10 +1,13 @@
+import mimetypes
 import uuid
 from pathlib import Path
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, UploadFile, status
+from fastapi.responses import Response
 import redis.asyncio as aioredis
 
 from app.core.redis import get_redis
+from app.core.storage import get_storage
 from app.core.task_tracker import create_task, get_task
 from app.models.knowledge import (
     IngestAcceptedResponse,
@@ -140,6 +143,31 @@ async def ingest_document(
         owner_id, task_id, data, file.filename or "document", r,
     )
     return IngestAcceptedResponse(task_id=task_id)
+
+
+# -- File serving (internal — called by API service, not exposed to internet) --
+
+
+@router.get("/storage/{path:path}", response_class=Response)
+async def serve_storage_file(path: str) -> Response:
+    """Serve a stored file by its relative path. Internal use only."""
+    storage = get_storage()
+    # Guard against path traversal
+    base = (storage._base).resolve()
+    target = (base / path).resolve()
+    if not str(target).startswith(str(base)):
+        raise HTTPException(status_code=400, detail="Invalid path")
+    try:
+        data = storage.read_file(path)
+    except (FileNotFoundError, OSError):
+        raise HTTPException(status_code=404, detail="File not found")
+    mime_type = mimetypes.guess_type(path)[0] or "application/octet-stream"
+    filename = Path(path).name
+    return Response(
+        content=data,
+        media_type=mime_type,
+        headers={"Content-Disposition": f'inline; filename="{filename}"'},
+    )
 
 
 # -- Task status polling --

@@ -280,6 +280,14 @@ class AIServiceClient:
         resp.raise_for_status()
         return resp.json()
 
+    async def get_file_bytes(self, relative_path: str) -> tuple[bytes, str]:
+        """Fetch a stored file from the AI service. Returns (bytes, mime_type)."""
+        client = await self._get_client()
+        resp = await client.get(f"/storage/{relative_path}")
+        resp.raise_for_status()
+        mime = resp.headers.get("content-type", "application/octet-stream")
+        return resp.content, mime
+
     async def get_task_status(self, task_id: str) -> dict:
         client = await self._get_client()
         resp = await client.get(f"/tasks/{task_id}")

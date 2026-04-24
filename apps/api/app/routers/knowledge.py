@@ -1,6 +1,8 @@
+import mimetypes
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, status
+from fastapi.responses import Response
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -247,6 +249,42 @@ async def get_entry(
     if entry is None:
         raise HTTPException(status_code=404, detail="Entry not found")
     return KnowledgeEntryResponse.model_validate(entry)
+
+
+@router.get("/entries/{entry_id}/file", response_class=Response)
+async def get_entry_file(
+    entry_id: str,
+    auth: AuthContext = Depends(require_auth),
+    db: AsyncSession = Depends(get_db),
+    ai: AIServiceClient = Depends(get_ai_client),
+) -> Response:
+    """Stream the original uploaded file for a knowledge entry."""
+    result = await db.execute(
+        select(KnowledgeEntry).where(
+            KnowledgeEntry.id == entry_id,
+            KnowledgeEntry.owner_id == auth.subject_id,
+        )
+    )
+    entry = result.scalar_one_or_none()
+    if entry is None:
+        raise HTTPException(status_code=404, detail="Entry not found")
+    if not entry.original_content_path:
+        raise HTTPException(status_code=404, detail="No file for this entry")
+
+    try:
+        data, mime = await ai.get_file_bytes(entry.original_content_path)
+    except Exception:
+        raise HTTPException(status_code=404, detail="File not available")
+
+    filename = Path(entry.original_content_path).name
+    return Response(
+        content=data,
+        media_type=mime or (mimetypes.guess_type(filename)[0] or "application/octet-stream"),
+        headers={
+            "Content-Disposition": f'inline; filename="{filename}"',
+            "Cache-Control": "private, max-age=3600",
+        },
+    )
 
 
 @router.delete("/entries/{entry_id}", status_code=204)
