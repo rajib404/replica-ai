@@ -8,7 +8,7 @@ import {
   TextInput,
   View,
 } from "react-native";
-import { SafeAreaView } from "react-native-safe-area-context";
+import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import { useAuth } from "../../src/context/AuthContext";
@@ -60,6 +60,7 @@ function StreamingBubble({ text }: { text: string }) {
 export default function ChatScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const router = useRouter();
+  const insets = useSafeAreaInsets();
   const { ownerId, accessToken } = useAuth();
   const [inputText, setInputText] = useState("");
   const flatListRef = useRef<FlatList>(null);
@@ -93,7 +94,7 @@ export default function ChatScreen() {
   const isStreaming = streamingText.length > 0;
 
   return (
-    <SafeAreaView className="flex-1 bg-black">
+    <SafeAreaView className="flex-1 bg-black" edges={["top", "left", "right"]}>
       {/* Header */}
       <View className="flex-row items-center px-4 py-3 border-b border-zinc-900 gap-3">
         <Pressable onPress={() => router.back()} className="active:opacity-60">
@@ -123,8 +124,8 @@ export default function ChatScreen() {
       )}
 
       <KeyboardAvoidingView
-        behavior={Platform.OS === "ios" ? "padding" : "height"}
-        keyboardVerticalOffset={0}
+        behavior="padding"
+        keyboardVerticalOffset={Platform.OS === "ios" ? 0 : 24}
         className="flex-1"
       >
         <FlatList
@@ -148,7 +149,7 @@ export default function ChatScreen() {
         />
 
         {/* Input bar */}
-        <View className="flex-row items-end gap-2 px-4 py-3 border-t border-zinc-900">
+        <View className="flex-row items-end gap-2 px-4 pt-3 border-t border-zinc-900" style={{ paddingBottom: Math.max(insets.bottom, 12) }}>
           <TextInput
             className="flex-1 bg-zinc-900 text-white rounded-2xl px-4 py-3 border border-zinc-800 max-h-28"
             placeholder="Message…"
