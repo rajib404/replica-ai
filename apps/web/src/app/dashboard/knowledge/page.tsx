@@ -13,17 +13,20 @@ import {
 } from '@/lib/pwa/db';
 
 interface KnowledgeEntry {
-  entry_id: string;
-  text: string;
-  source?: string;
-  tags?: string[];
-  content_type?: string;
-  language?: string;
-  updated_at?: string;
+  id: string;
+  content_type: string;
+  original_content_path: string | null;
+  original_language: string | null;
+  english_translation: string | null;
+  metadata: Record<string, unknown> | null;
+  created_at: string;
 }
 
 interface KnowledgeListResponse {
   entries: KnowledgeEntry[];
+  total: number;
+  page: number;
+  page_size: number;
 }
 
 export default function KnowledgePage() {
@@ -66,14 +69,14 @@ export default function KnowledgePage() {
         // Cache for offline.
         for (const e of resp.entries ?? []) {
           await cacheKnowledgeEntry({
-            entry_id: e.entry_id,
+            entry_id: e.id,
             ownerId,
-            text: e.text,
-            source: e.source,
-            tags: e.tags,
+            text: e.english_translation ?? '',
+            source: e.original_content_path ?? undefined,
+            tags: undefined,
             content_type: e.content_type,
-            language: e.language,
-            updated_at: e.updated_at ? new Date(e.updated_at).getTime() : Date.now(),
+            language: e.original_language ?? undefined,
+            updated_at: new Date(e.created_at).getTime(),
           });
         }
       } catch (err) {
@@ -99,7 +102,7 @@ export default function KnowledgePage() {
     if (!query.trim()) return entries;
     const tokens = query.toLowerCase().split(/\s+/).filter(Boolean);
     return entries.filter((e) => {
-      const hay = [e.text, e.source ?? '', (e.tags ?? []).join(' ')].join(' ').toLowerCase();
+      const hay = [e.english_translation ?? '', e.original_content_path ?? ''].join(' ').toLowerCase();
       return tokens.every((tok) => hay.includes(tok));
     });
   }, [entries, query]);
@@ -171,18 +174,16 @@ export default function KnowledgePage() {
         ) : (
           filtered.map((e) => (
             <article
-              key={e.entry_id}
+              key={e.id}
               className="rounded-lg border bg-card p-3 text-sm"
             >
-              <p className="line-clamp-3 whitespace-pre-wrap">{e.text}</p>
-              {(e.source || e.tags?.length) && (
+              {e.english_translation && (
+                <p className="line-clamp-3 whitespace-pre-wrap">{e.english_translation}</p>
+              )}
+              {e.original_content_path && (
                 <div className="mt-2 flex flex-wrap items-center gap-2 text-[11px] text-muted-foreground">
-                  {e.source && <span>{e.source}</span>}
-                  {e.tags?.map((tag) => (
-                    <span key={tag} className="rounded-full bg-muted px-2 py-0.5">
-                      {tag}
-                    </span>
-                  ))}
+                  <span className="truncate">{e.original_content_path.split('/').pop()}</span>
+                  <span className="rounded-full bg-muted px-2 py-0.5">{e.content_type}</span>
                 </div>
               )}
             </article>
@@ -195,12 +196,14 @@ export default function KnowledgePage() {
 
 function toEntries(cached: CachedKnowledgeEntry[]): KnowledgeEntry[] {
   return cached.map((c) => ({
-    entry_id: c.entry_id,
-    text: c.text,
-    source: c.source,
-    tags: c.tags,
-    content_type: c.content_type,
-    language: c.language,
-    updated_at: new Date(c.updated_at).toISOString(),
+    id: c.entry_id,
+    owner_id: '',
+    content_type: (c.content_type ?? 'text') as KnowledgeEntry['content_type'],
+    original_content_path: c.source ?? null,
+    original_language: c.language ?? null,
+    english_translation: c.text ?? null,
+    embedding_id: null,
+    metadata: null,
+    created_at: new Date(c.updated_at).toISOString(),
   }));
 }
