@@ -39,7 +39,7 @@ export default function ThreadsTab() {
   return (
     <SafeAreaView className="flex-1 bg-black">
       {/* Header */}
-      <View className="flex-row items-center justify-between px-5 pb-3 pt-1">
+      <View className="flex-row items-center justify-between px-5 pb-3 pt-4">
         <Text className="text-white text-2xl font-bold">Chats</Text>
         <Pressable
           onPress={newChat}

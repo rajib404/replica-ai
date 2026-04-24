@@ -123,14 +123,15 @@ export default function ChatScreen() {
       )}
 
       <KeyboardAvoidingView
-        behavior="padding"
-        keyboardVerticalOffset={Platform.OS === "ios" ? 0 : 24}
+        behavior={Platform.OS === "ios" ? "padding" : undefined}
         className="flex-1"
       >
         <FlatList
           ref={flatListRef}
           data={messages}
           keyExtractor={(m) => m.id}
+          keyboardDismissMode="on-drag"
+          keyboardShouldPersistTaps="handled"
           contentContainerStyle={{ paddingVertical: 12, gap: 4 }}
           onContentSizeChange={() => flatListRef.current?.scrollToEnd({ animated: false })}
           ListEmptyComponent={
