@@ -183,7 +183,7 @@ export function ChatView({ ownerId }: ChatViewProps) {
   }, []);
 
   const handleDone = useCallback(
-    (messageId: string, newThreadId: string, sources: ChatSource[], learning: boolean) => {
+    (messageId: string, newThreadId: string, sources: ChatSource[], learning: boolean, content: string) => {
       setThreadId(newThreadId);
       setStreamingMessageId(null);
       setIsTyping(false);
@@ -192,13 +192,29 @@ export function ChatView({ ownerId }: ChatViewProps) {
         setIsLearning(true);
       }
 
-      setMessages((prev) =>
-        prev.map((m) =>
-          m.id === messageId
-            ? { ...m, isStreaming: false, sources }
-            : m,
-        ),
-      );
+      setMessages((prev) => {
+        const existingIdx = prev.findIndex((m) => m.id === messageId);
+        if (existingIdx >= 0) {
+          const updated = [...prev];
+          updated[existingIdx] = { ...updated[existingIdx], isStreaming: false, sources };
+          return updated;
+        }
+        // No matching message — streaming tokens may not have arrived (e.g. AI error).
+        // Fall back to the full content carried in the done frame.
+        if (content) {
+          return [
+            ...prev,
+            {
+              id: messageId,
+              role: 'assistant' as const,
+              content,
+              timestamp: new Date(),
+              sources,
+            },
+          ];
+        }
+        return prev;
+      });
     },
     [],
   );

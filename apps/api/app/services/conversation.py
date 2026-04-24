@@ -112,10 +112,11 @@ class ConversationManager:
         content: str,
         language: str = "en",
         db: AsyncSession | None = None,
+        message_id: str | None = None,
     ) -> Message:
         """Save a message to the database. Caller must commit."""
         msg = Message(
-            id=str(uuid.uuid4()),
+            id=message_id or str(uuid.uuid4()),
             thread_id=thread_id,
             role=role,
             content_text=content,

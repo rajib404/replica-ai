@@ -1,0 +1,141 @@
+import { useCallback, useEffect, useRef, useState } from "react";
+import { WS_ENDPOINTS } from "../api/endpoints";
+
+const WS_URL = process.env.EXPO_PUBLIC_WS_URL ?? "ws://localhost:8000";
+
+export interface ChatMessage {
+  id: string;
+  role: "user" | "assistant";
+  text: string;
+  sources?: Array<{ title?: string; url?: string }>;
+  degraded?: boolean;
+}
+
+export type ConnectionState = "connecting" | "connected" | "disconnected" | "error";
+
+export function useChat(ownerId: string, accessToken: string, initialThreadId?: string) {
+  const ws = useRef<WebSocket | null>(null);
+  const streamBuffer = useRef(""); // accumulate tokens without re-rendering on each one
+
+  const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [streamingText, setStreamingText] = useState(""); // shown as live typing bubble
+  const [connectionState, setConnectionState] = useState<ConnectionState>("disconnected");
+  const [activeThreadId, setActiveThreadId] = useState<string | undefined>(initialThreadId);
+  const [degraded, setDegraded] = useState(false);
+
+  const handleMessage = useCallback((raw: string) => {
+    let msg: Record<string, unknown>;
+    try {
+      msg = JSON.parse(raw);
+    } catch {
+      return;
+    }
+
+    switch (msg.type) {
+      case "auth_ok":
+        break;
+
+      // Server type: "token"
+      case "token": {
+        streamBuffer.current += (msg.token as string) ?? "";
+        setStreamingText(streamBuffer.current);
+        break;
+      }
+
+      // Server type: "done"
+      case "done": {
+        const finalText = streamBuffer.current || ((msg.content as string) ?? "");
+        streamBuffer.current = "";
+        setStreamingText("");
+
+        if (finalText) {
+          setMessages((prev) => [
+            ...prev,
+            {
+              id: (msg.message_id as string) ?? `ai-${Date.now()}`,
+              role: "assistant",
+              text: finalText,
+              sources: (msg.sources as ChatMessage["sources"]) ?? [],
+              degraded: !!(msg.degraded),
+            },
+          ]);
+        }
+        if (msg.thread_id) setActiveThreadId(msg.thread_id as string);
+        if (msg.degraded) setDegraded(true);
+        break;
+      }
+
+      case "learning":
+        break;
+
+      case "error":
+        console.warn("WS server error:", msg.detail);
+        break;
+    }
+  }, []);
+
+  const connect = useCallback(() => {
+    if (!ownerId || !accessToken) return;
+    if (ws.current?.readyState === WebSocket.OPEN) return;
+
+    setConnectionState("connecting");
+    const url = `${WS_URL}${WS_ENDPOINTS.CHAT(ownerId, accessToken)}`;
+    const socket = new WebSocket(url);
+
+    socket.onopen = () => setConnectionState("connected");
+
+    socket.onclose = (e) => {
+      setConnectionState(
+        e.code === 4001 || e.code === 4003 || e.code === 4004 ? "error" : "disconnected"
+      );
+    };
+
+    socket.onerror = () => setConnectionState("error");
+    socket.onmessage = (e) => handleMessage(e.data as string);
+
+    ws.current = socket;
+  }, [ownerId, accessToken, handleMessage]);
+
+  const disconnect = useCallback(() => {
+    ws.current?.close();
+    ws.current = null;
+    streamBuffer.current = "";
+    setStreamingText("");
+    setConnectionState("disconnected");
+  }, []);
+
+  const sendMessage = useCallback(
+    (text: string) => {
+      if (!text.trim()) return;
+      if (ws.current?.readyState !== WebSocket.OPEN) {
+        console.warn("WS not open, state:", ws.current?.readyState);
+        return;
+      }
+
+      setMessages((prev) => [
+        ...prev,
+        { id: `user-${Date.now()}`, role: "user", text: text.trim() },
+      ]);
+
+      ws.current.send(
+        JSON.stringify({
+          type: "message",
+          text: text.trim(),
+          ...(activeThreadId ? { thread_id: activeThreadId } : {}),
+        })
+      );
+    },
+    [activeThreadId]
+  );
+
+  return {
+    messages,
+    streamingText,
+    connectionState,
+    activeThreadId,
+    degraded,
+    connect,
+    disconnect,
+    sendMessage,
+  };
+}

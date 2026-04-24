@@ -625,24 +625,26 @@ async def websocket_chat(
                     if not full_response:
                         full_response = "I'm sorry, I encountered an error generating a response."
 
-                # Save assistant message
-                assistant_msg = await conv.save_message(
+                # Save assistant message using the same ID sent in token events
+                await conv.save_message(
                     thread_id=thread.id,
                     role=MessageRole.assistant,
                     content=full_response,
                     db=db,
+                    message_id=assistant_msg_id,
                 )
-                assistant_msg_id = assistant_msg.id
 
                 await db.commit()
 
-                # Send done signal
+                # Send done signal — include content so clients can display it
+                # even when no token events were received (e.g. streaming error)
                 await websocket.send_json(
                     WSResponseDone(
                         message_id=assistant_msg_id,
                         thread_id=thread.id,
                         sources=sources,
                         is_learning=is_learning,
+                        content=full_response,
                     ).model_dump()
                 )
 

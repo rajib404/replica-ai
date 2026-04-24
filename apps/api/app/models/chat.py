@@ -125,6 +125,7 @@ class WSResponseDone(BaseModel):
     thread_id: str
     sources: list[dict] = []
     is_learning: bool = False
+    content: str = ""  # full response text (fallback when streaming failed)
 
 
 class WSError(BaseModel):

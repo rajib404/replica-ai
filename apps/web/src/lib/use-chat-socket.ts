@@ -30,7 +30,7 @@ export interface ChallengeResultData {
 interface UseChatSocketOptions {
   ownerId: string;
   onToken: (token: string, messageId: string) => void;
-  onDone: (messageId: string, threadId: string, sources: ChatSource[], isLearning: boolean) => void;
+  onDone: (messageId: string, threadId: string, sources: ChatSource[], isLearning: boolean, content: string) => void;
   onLearning: () => void;
   onError: (detail: string) => void;
   onChallenge?: (challenge: ChallengeData) => void;
@@ -87,7 +87,7 @@ export function useChatSocket({
             onToken(data.token, data.message_id);
             break;
           case 'done':
-            onDone(data.message_id, data.thread_id, data.sources ?? [], data.is_learning ?? false);
+            onDone(data.message_id, data.thread_id, data.sources ?? [], data.is_learning ?? false, data.content ?? '');
             break;
           case 'learning':
             onLearning();
