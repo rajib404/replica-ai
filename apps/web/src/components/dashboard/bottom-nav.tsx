@@ -6,6 +6,7 @@ import { useState } from 'react';
 import {
   MessageSquare,
   BookOpen,
+  Archive,
   Sparkles,
   Users,
   MoreHorizontal,
@@ -29,11 +30,12 @@ import { useHaptic } from '@/lib/hooks/use-haptic';
 const PRIMARY = [
   { href: '/dashboard/chat', label: 'Chat', icon: MessageSquare },
   { href: '/dashboard/knowledge', label: 'Knowledge', icon: BookOpen },
+  { href: '/dashboard/assets', label: 'Assets', icon: Archive },
   { href: '/dashboard/personality', label: 'Personality', icon: Sparkles },
-  { href: '/dashboard/family', label: 'Family', icon: Users },
 ] as const;
 
 const OVERFLOW = [
+  { href: '/dashboard/family', label: 'Family', icon: Users },
   { href: '/dashboard/learning', label: 'Self-Learning', icon: GraduationCap },
   { href: '/dashboard/training', label: 'Model Training', icon: Cpu },
   { href: '/dashboard/security', label: 'Security', icon: Shield },

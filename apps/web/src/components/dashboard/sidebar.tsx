@@ -5,6 +5,7 @@ import { usePathname } from 'next/navigation';
 import {
   MessageSquare,
   BookOpen,
+  Archive,
   Users,
   Settings,
   Server,
@@ -21,6 +22,7 @@ import { ThemeToggle } from '@/components/theme-toggle';
 const NAV_ITEMS = [
   { href: '/dashboard/chat', label: 'Chat', icon: MessageSquare },
   { href: '/dashboard/knowledge', label: 'Knowledge', icon: BookOpen },
+  { href: '/dashboard/assets', label: 'Assets', icon: Archive },
   { href: '/dashboard/personality', label: 'Personality', icon: Sparkles },
   { href: '/dashboard/learning', label: 'Self-Learning', icon: GraduationCap },
   { href: '/dashboard/training', label: 'Model Training', icon: Cpu },
