@@ -1,7 +1,27 @@
-import { useCallback, useEffect, useRef, useState } from "react";
-import { WS_ENDPOINTS } from "../api/endpoints";
+import { useCallback, useRef, useState } from "react";
+import axios from "axios";
+import { getToken, setToken } from "../store/auth";
+import { WS_ENDPOINTS, ENDPOINTS } from "../api/endpoints";
 
 const WS_URL = process.env.EXPO_PUBLIC_WS_URL ?? "ws://localhost:8000";
+const API_URL = process.env.EXPO_PUBLIC_API_URL ?? "http://localhost:8000";
+
+async function refreshAccessToken(): Promise<string | null> {
+  try {
+    const refreshToken = await getToken("refresh");
+    if (!refreshToken) return null;
+    const { data } = await axios.post(`${API_URL}${ENDPOINTS.AUTH_REFRESH}`, {
+      refresh_token: refreshToken,
+    });
+    const newAccess: string = data.tokens.access_token;
+    const newRefresh: string = data.tokens.refresh_token;
+    await setToken("access", newAccess);
+    await setToken("refresh", newRefresh);
+    return newAccess;
+  } catch {
+    return null;
+  }
+}
 
 export interface ChatMessage {
   id: string;
@@ -13,9 +33,10 @@ export interface ChatMessage {
 
 export type ConnectionState = "connecting" | "connected" | "disconnected" | "error";
 
-export function useChat(ownerId: string, accessToken: string, initialThreadId?: string) {
+export function useChat(ownerId: string, _accessToken: string, initialThreadId?: string) {
   const ws = useRef<WebSocket | null>(null);
   const streamBuffer = useRef(""); // accumulate tokens without re-rendering on each one
+  const isRefreshing = useRef(false);
 
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [streamingText, setStreamingText] = useState(""); // shown as live typing bubble
@@ -74,27 +95,46 @@ export function useChat(ownerId: string, accessToken: string, initialThreadId?: 
     }
   }, []);
 
-  const connect = useCallback(() => {
-    if (!ownerId || !accessToken) return;
+  const connect = useCallback(async () => {
+    if (!ownerId) return;
     if (ws.current?.readyState === WebSocket.OPEN) return;
 
+    // Always read token fresh from storage so refreshed tokens are used
+    const token = await getToken("access");
+    if (!token) {
+      setConnectionState("error");
+      return;
+    }
+
     setConnectionState("connecting");
-    const url = `${WS_URL}${WS_ENDPOINTS.CHAT(ownerId, accessToken)}`;
+    const url = `${WS_URL}${WS_ENDPOINTS.CHAT(ownerId, token)}`;
     const socket = new WebSocket(url);
 
     socket.onopen = () => setConnectionState("connected");
 
-    socket.onclose = (e) => {
-      setConnectionState(
-        e.code === 4001 || e.code === 4003 || e.code === 4004 ? "error" : "disconnected"
-      );
+    socket.onclose = async (e) => {
+      ws.current = null;
+      // Token expired or invalid — try refreshing once then reconnect
+      if ((e.code === 4001 || e.code === 4004) && !isRefreshing.current) {
+        isRefreshing.current = true;
+        setConnectionState("connecting");
+        const newToken = await refreshAccessToken();
+        isRefreshing.current = false;
+        if (newToken) {
+          connect();
+        } else {
+          setConnectionState("error");
+        }
+        return;
+      }
+      setConnectionState(e.code === 4003 ? "error" : "disconnected");
     };
 
     socket.onerror = () => setConnectionState("error");
     socket.onmessage = (e) => handleMessage(e.data as string);
 
     ws.current = socket;
-  }, [ownerId, accessToken, handleMessage]);
+  }, [ownerId, handleMessage]);
 
   const disconnect = useCallback(() => {
     ws.current?.close();
