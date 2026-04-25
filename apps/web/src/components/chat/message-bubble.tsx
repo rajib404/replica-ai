@@ -74,12 +74,6 @@ export function MessageBubble({ message, onReaction, onBookmark }: MessageBubble
               {message.language.toUpperCase()}
             </Badge>
           )}
-          {message.sources && message.sources.length > 0 && (
-            <Badge variant="secondary" className="h-4 px-1.5 text-[10px]">
-              {message.sources.length} source{message.sources.length !== 1 ? 's' : ''}
-            </Badge>
-          )}
-
           {/* Reactions — visible on hover */}
           {!isUser && !message.isStreaming && (
             <div className="flex gap-0.5 opacity-0 transition-opacity group-hover:opacity-100">

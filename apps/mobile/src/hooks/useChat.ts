@@ -1,4 +1,4 @@
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import axios from "axios";
 import { getToken, setToken } from "../store/auth";
 import { WS_ENDPOINTS, ENDPOINTS } from "../api/endpoints";
@@ -39,10 +39,16 @@ export function useChat(ownerId: string, _accessToken: string, initialThreadId?:
   const isRefreshing = useRef(false);
 
   const [messages, setMessages] = useState<ChatMessage[]>([]);
-  const [streamingText, setStreamingText] = useState(""); // shown as live typing bubble
+  const [streamingText, setStreamingText] = useState("");
+  const [isThinking, setIsThinking] = useState(false);
   const [connectionState, setConnectionState] = useState<ConnectionState>("disconnected");
   const [activeThreadId, setActiveThreadId] = useState<string | undefined>(initialThreadId);
   const [degraded, setDegraded] = useState(false);
+
+  // Sync external threadId into state (handles async resolution in the tab screen)
+  useEffect(() => {
+    if (initialThreadId) setActiveThreadId(initialThreadId);
+  }, [initialThreadId]);
 
   const handleMessage = useCallback((raw: string) => {
     let msg: Record<string, unknown>;
@@ -58,6 +64,7 @@ export function useChat(ownerId: string, _accessToken: string, initialThreadId?:
 
       // Server type: "token"
       case "token": {
+        setIsThinking(false);
         streamBuffer.current += (msg.token as string) ?? "";
         setStreamingText(streamBuffer.current);
         break;
@@ -65,6 +72,7 @@ export function useChat(ownerId: string, _accessToken: string, initialThreadId?:
 
       // Server type: "done"
       case "done": {
+        setIsThinking(false);
         const finalText = streamBuffer.current || ((msg.content as string) ?? "");
         streamBuffer.current = "";
         setStreamingText("");
@@ -156,6 +164,7 @@ export function useChat(ownerId: string, _accessToken: string, initialThreadId?:
         ...prev,
         { id: `user-${Date.now()}`, role: "user", text: text.trim() },
       ]);
+      setIsThinking(true);
 
       ws.current.send(
         JSON.stringify({
@@ -168,14 +177,20 @@ export function useChat(ownerId: string, _accessToken: string, initialThreadId?:
     [activeThreadId]
   );
 
+  const loadHistory = useCallback((history: ChatMessage[]) => {
+    setMessages(history);
+  }, []);
+
   return {
     messages,
     streamingText,
+    isThinking,
     connectionState,
     activeThreadId,
     degraded,
     connect,
     disconnect,
     sendMessage,
+    loadHistory,
   };
 }

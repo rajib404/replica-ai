@@ -32,15 +32,6 @@ function MessageBubble({ msg }: { msg: ChatMessage }) {
         }`}
       >
         <Text className="text-white text-base leading-relaxed">{msg.text}</Text>
-        {msg.sources && msg.sources.length > 0 && (
-          <View className="mt-1.5 gap-0.5">
-            {msg.sources.map((s, i) => (
-              <Text key={i} className="text-indigo-300 text-xs opacity-80" numberOfLines={1}>
-                ↗ {s.title ?? s.url ?? "source"}
-              </Text>
-            ))}
-          </View>
-        )}
       </View>
     </View>
   );
