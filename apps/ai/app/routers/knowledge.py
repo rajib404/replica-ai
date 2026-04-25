@@ -27,6 +27,8 @@ DOC_MAX_SIZE = 20 * 1024 * 1024  # 20 MB
 AUDIO_EXTENSIONS = {".wav", ".mp3", ".m4a", ".ogg", ".flac", ".webm"}
 VIDEO_EXTENSIONS = {".mp4", ".mov", ".avi", ".mkv", ".webm"}
 DOC_EXTENSIONS = {".pdf", ".docx", ".txt", ".csv"}
+IMAGE_MAX_SIZE = 10 * 1024 * 1024  # 10 MB
+IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".gif", ".webp", ".heic", ".heif"}
 
 _ingestor = KnowledgeIngestor()
 
@@ -141,6 +143,36 @@ async def ingest_document(
     background_tasks.add_task(
         _ingestor.ingest_document_background,
         owner_id, task_id, data, file.filename or "document", r,
+    )
+    return IngestAcceptedResponse(task_id=task_id)
+
+
+# -- Image ingest (background) --
+
+
+@router.post("/ingest/image", status_code=202, response_model=IngestAcceptedResponse)
+async def ingest_image(
+    owner_id: str,
+    file: UploadFile,
+    background_tasks: BackgroundTasks,
+    r: aioredis.Redis = Depends(get_redis),
+) -> IngestAcceptedResponse:
+    """Async: save image file, generate embedding from filename+metadata. Returns task_id."""
+    _validate_extension(file.filename or "", IMAGE_EXTENSIONS, "image")
+
+    data = await file.read()
+    if len(data) > IMAGE_MAX_SIZE:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Image exceeds {IMAGE_MAX_SIZE // (1024*1024)}MB limit",
+        )
+
+    task_id = str(uuid.uuid4())
+    await create_task(r, task_id, owner_id)
+
+    background_tasks.add_task(
+        _ingestor.ingest_image_background,
+        owner_id, task_id, data, file.filename or "image.jpg", r,
     )
     return IngestAcceptedResponse(task_id=task_id)
 

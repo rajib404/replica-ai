@@ -280,6 +280,19 @@ class AIServiceClient:
         resp.raise_for_status()
         return resp.json()
 
+    @ollama_retry
+    async def ingest_image(
+        self, owner_id: str, file_bytes: bytes, filename: str
+    ) -> dict:
+        client = await self._get_client()
+        resp = await client.post(
+            "/ingest/image",
+            params={"owner_id": owner_id},
+            files={"file": (filename, file_bytes)},
+        )
+        resp.raise_for_status()
+        return resp.json()
+
     async def get_file_bytes(self, relative_path: str) -> tuple[bytes, str]:
         """Fetch a stored file from the AI service. Returns (bytes, mime_type)."""
         client = await self._get_client()

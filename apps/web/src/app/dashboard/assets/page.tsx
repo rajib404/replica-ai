@@ -8,7 +8,6 @@ import {
   Mic,
   Video,
   AlignLeft,
-  File,
   LayoutGrid,
   List,
   RefreshCw,
@@ -27,7 +26,7 @@ import { cn } from '@/lib/utils';
 interface KnowledgeEntry {
   id: string;
   owner_id: string;
-  content_type: 'text' | 'audio' | 'video' | 'document';
+  content_type: 'text' | 'audio' | 'video' | 'image' | 'document';
   original_content_path: string | null;
   original_language: string | null;
   english_translation: string | null;
@@ -43,7 +42,7 @@ interface KnowledgeListResponse {
   page_size: number;
 }
 
-type AssetCategory = 'document' | 'audio' | 'video' | 'text';
+type AssetCategory = 'document' | 'audio' | 'video' | 'image' | 'text';
 type ViewMode = 'category' | 'list';
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -77,13 +76,14 @@ const CATEGORY_META: Record<
   AssetCategory,
   { label: string; icon: React.ElementType; color: string; bg: string }
 > = {
-  document: { label: 'Documents', icon: FileText,  color: 'text-blue-500',    bg: 'bg-blue-500/10' },
-  audio:    { label: 'Audio',     icon: Mic,        color: 'text-violet-500',  bg: 'bg-violet-500/10' },
-  video:    { label: 'Video',     icon: Video,      color: 'text-rose-500',    bg: 'bg-rose-500/10' },
-  text:     { label: 'Notes',     icon: AlignLeft,  color: 'text-amber-500',   bg: 'bg-amber-500/10' },
+  document: { label: 'Documents', icon: FileText,   color: 'text-blue-500',    bg: 'bg-blue-500/10' },
+  audio:    { label: 'Audio',     icon: Mic,         color: 'text-violet-500',  bg: 'bg-violet-500/10' },
+  video:    { label: 'Video',     icon: Video,       color: 'text-rose-500',    bg: 'bg-rose-500/10' },
+  image:    { label: 'Photos',    icon: ImageIcon,   color: 'text-emerald-500', bg: 'bg-emerald-500/10' },
+  text:     { label: 'Notes',     icon: AlignLeft,   color: 'text-amber-500',   bg: 'bg-amber-500/10' },
 };
 
-const CATEGORY_ORDER: AssetCategory[] = ['document', 'audio', 'video', 'text'];
+const CATEGORY_ORDER: AssetCategory[] = ['image', 'document', 'audio', 'video', 'text'];
 
 // ─── File preview hook ────────────────────────────────────────────────────────
 
@@ -183,6 +183,15 @@ function PreviewModal({ entry, onClose }: { entry: KnowledgeEntry; onClose: () =
             <p className="text-sm text-muted-foreground">
               {hasFile ? 'Could not load file.' : 'No file attached to this entry.'}
             </p>
+          )}
+
+          {blobUrl && cat === 'image' && (
+            // eslint-disable-next-line @next/next/no-img-element
+            <img
+              src={blobUrl}
+              alt={name}
+              className="max-h-[70vh] max-w-full rounded-lg object-contain"
+            />
           )}
 
           {blobUrl && cat === 'document' && (

@@ -23,6 +23,7 @@ const ALLOWED_FILE_TYPES = [
   '.pdf', '.docx', '.txt', '.csv',
   '.wav', '.mp3', '.m4a', '.ogg', '.flac',
   '.mp4', '.mov', '.avi', '.mkv', '.webm',
+  '.jpg', '.jpeg', '.png', '.gif', '.webp', '.heic', '.heif',
 ];
 
 export function ChatInput({ onSend, onFileAttach, onVoiceToggle, onVideoCall, onVideoRecord, voiceEnabled, disabled, initialText }: ChatInputProps) {
@@ -145,13 +146,13 @@ export function ChatInput({ onSend, onFileAttach, onVoiceToggle, onVideoCall, on
           onChange={handleFileSelect}
         />
 
-        {/* Hidden camera input (touch devices only) */}
+        {/* Hidden camera / photo picker input */}
         <input
           ref={cameraInputRef}
           type="file"
           className="hidden"
           accept="image/*"
-          capture="environment"
+          capture={isTouchDevice ? 'environment' : undefined}
           onChange={handleCameraCapture}
         />
 
@@ -172,23 +173,21 @@ export function ChatInput({ onSend, onFileAttach, onVoiceToggle, onVideoCall, on
             <TooltipContent>Attach file</TooltipContent>
           </Tooltip>
 
-          {isTouchDevice && (
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  className="h-9 w-9 shrink-0"
-                  onClick={() => cameraInputRef.current?.click()}
-                  disabled={disabled}
-                  aria-label="Take photo"
-                >
-                  <Camera className="h-4 w-4" />
-                </Button>
-              </TooltipTrigger>
-              <TooltipContent>Take photo</TooltipContent>
-            </Tooltip>
-          )}
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                variant="ghost"
+                size="icon"
+                className="h-9 w-9 shrink-0"
+                onClick={() => cameraInputRef.current?.click()}
+                disabled={disabled}
+                aria-label="Take photo"
+              >
+                <Camera className="h-4 w-4" />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent>{isTouchDevice ? 'Take photo' : 'Upload image'}</TooltipContent>
+          </Tooltip>
 
           <Tooltip>
             <TooltipTrigger asChild>

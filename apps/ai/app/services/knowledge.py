@@ -393,6 +393,56 @@ class KnowledgeIngestor:
             logger.exception("Document ingestion failed for task %s", task_id)
             await update_task(r, task_id, status=TaskStatus.failed, error=str(exc))
 
+    async def ingest_image_background(
+        self,
+        owner_id: str,
+        task_id: str,
+        image_bytes: bytes,
+        filename: str,
+        r: aioredis.Redis,
+    ) -> None:
+        """Background task for image ingestion. Saves file, embeds from filename metadata."""
+        entry_id = str(uuid.uuid4())
+        try:
+            await update_task(r, task_id, status=TaskStatus.processing, progress=20)
+
+            rel_path = self.storage.save_file(
+                owner_id, "image", entry_id, filename, image_bytes
+            )
+
+            await update_task(r, task_id, progress=60)
+
+            # Embed a descriptive text so the image is searchable by filename/type
+            stem = Path(filename).stem.replace("_", " ").replace("-", " ")
+            embed_text = f"photo image: {stem}"
+
+            embedding_id = await self._generate_and_store_embedding(
+                text=embed_text,
+                entry_id=entry_id,
+                owner_id=owner_id,
+                content_type="image",
+                language="en",
+                content_preview=embed_text,
+            )
+
+            await update_task(
+                r, task_id,
+                status=TaskStatus.completed,
+                progress=100,
+                result={
+                    "entry_id": entry_id,
+                    "language": "en",
+                    "english_translation": None,
+                    "embedding_id": embedding_id,
+                    "content_preview": embed_text,
+                    "original_content_path": rel_path,
+                    "metadata": {"filename": filename},
+                },
+            )
+        except Exception as exc:
+            logger.exception("Image ingestion failed for task %s", task_id)
+            await update_task(r, task_id, status=TaskStatus.failed, error=str(exc))
+
     async def delete_vectors(self, entry_id: str) -> None:
         """Delete all vectors for a knowledge entry from Qdrant."""
         await self.qdrant.delete_by_entry_id(entry_id)

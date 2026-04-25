@@ -591,6 +591,7 @@ export function ChatView({ ownerId }: ChatViewProps) {
     const ext = file.name.split('.').pop()?.toLowerCase() ?? '';
     const audioExts = ['wav', 'mp3', 'm4a', 'ogg', 'flac', 'webm'];
     const videoExts = ['mp4', 'mov', 'avi', 'mkv'];
+    const imageExts = ['jpg', 'jpeg', 'png', 'gif', 'webp', 'heic', 'heif'];
 
     let endpoint = '/api/knowledge/document';
     let label = 'document';
@@ -600,6 +601,9 @@ export function ChatView({ ownerId }: ChatViewProps) {
     } else if (videoExts.includes(ext)) {
       endpoint = '/api/knowledge/video';
       label = 'video';
+    } else if (imageExts.includes(ext)) {
+      endpoint = '/api/knowledge/image';
+      label = 'image';
     }
 
     setMessages((prev) => [

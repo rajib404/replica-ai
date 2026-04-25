@@ -16,6 +16,7 @@ class ContentType(str, enum.Enum):
     text = "text"
     audio = "audio"
     video = "video"
+    image = "image"
     document = "document"
 
 

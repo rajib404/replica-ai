@@ -135,9 +135,35 @@ export default function ChatScreen() {
       const name = asset.fileName ?? (isVideo ? "video.mp4" : "image.jpg");
       const mime = isVideo ? "video/mp4" : "image/jpeg";
       form.append("file", { uri: asset.uri, name, type: mime } as any);
-      const endpoint = isVideo ? ENDPOINTS.KNOWLEDGE_INGEST_VIDEO : ENDPOINTS.KNOWLEDGE_INGEST_DOCUMENT;
+      const endpoint = isVideo ? ENDPOINTS.KNOWLEDGE_INGEST_VIDEO : ENDPOINTS.KNOWLEDGE_INGEST_IMAGE;
       await apiClient.post(endpoint, form, { headers: { "Content-Type": "multipart/form-data" } });
-      Alert.alert("Uploaded", `${isVideo ? "Video" : "Image"} added to knowledge base.`);
+      Alert.alert("Uploaded", `${isVideo ? "Video" : "Photo"} added to knowledge base.`);
+    } catch (e: any) {
+      Alert.alert("Upload failed", e?.message ?? "Unknown error");
+    } finally {
+      setUploading(false);
+    }
+  };
+
+  const handleCameraPhoto = async () => {
+    Keyboard.dismiss();
+    const perm = await ImagePicker.requestCameraPermissionsAsync();
+    if (!perm.granted) { Alert.alert("Permission required", "Allow camera access to take photos."); return; }
+    const result = await ImagePicker.launchCameraAsync({
+      mediaTypes: ImagePicker.MediaTypeOptions.Images,
+      quality: 0.85,
+    });
+    if (result.canceled || !result.assets[0]) return;
+    const asset = result.assets[0];
+    setUploading(true);
+    try {
+      const form = new FormData();
+      const name = asset.fileName ?? "photo.jpg";
+      form.append("file", { uri: asset.uri, name, type: "image/jpeg" } as any);
+      await apiClient.post(ENDPOINTS.KNOWLEDGE_INGEST_IMAGE, form, {
+        headers: { "Content-Type": "multipart/form-data" },
+      });
+      Alert.alert("Uploaded", "Photo added to knowledge base.");
     } catch (e: any) {
       Alert.alert("Upload failed", e?.message ?? "Unknown error");
     } finally {
@@ -298,6 +324,13 @@ export default function ChatScreen() {
               className="w-8 h-8 items-center justify-center active:opacity-60 disabled:opacity-40"
             >
               <Ionicons name="image-outline" size={20} color="#71717a" />
+            </Pressable>
+            <Pressable
+              onPress={handleCameraPhoto}
+              disabled={uploading}
+              className="w-8 h-8 items-center justify-center active:opacity-60 disabled:opacity-40"
+            >
+              <Ionicons name="camera-outline" size={20} color="#71717a" />
             </Pressable>
             <Pressable
               onPress={handleVoiceToggle}

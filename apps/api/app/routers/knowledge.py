@@ -64,6 +64,8 @@ async def _auto_persist(ai: AIServiceClient, task_id: str, owner_id: str) -> Non
                 ct = ContentType.audio
             elif "/video/" in path:
                 ct = ContentType.video
+            elif "/image/" in path:
+                ct = ContentType.image
             elif "/document/" in path:
                 ct = ContentType.document
             else:
@@ -90,10 +92,12 @@ async def _auto_persist(ai: AIServiceClient, task_id: str, owner_id: str) -> Non
 AUDIO_MAX_SIZE = 50 * 1024 * 1024  # 50 MB
 VIDEO_MAX_SIZE = 500 * 1024 * 1024  # 500 MB
 DOC_MAX_SIZE = 20 * 1024 * 1024  # 20 MB
+IMAGE_MAX_SIZE = 10 * 1024 * 1024  # 10 MB
 
 AUDIO_EXTENSIONS = {".wav", ".mp3", ".m4a", ".ogg", ".flac", ".webm"}
 VIDEO_EXTENSIONS = {".mp4", ".mov", ".avi", ".mkv", ".webm"}
 DOC_EXTENSIONS = {".pdf", ".docx", ".txt", ".csv"}
+IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".gif", ".webp", ".heic", ".heif"}
 
 
 def _validate_extension(filename: str, allowed: set[str], label: str) -> None:
@@ -209,6 +213,30 @@ async def ingest_document(
     return IngestAcceptedResponse(task_id=result["task_id"])
 
 
+# -- Image ingest (background via AI service) --
+
+
+@router.post("/image", status_code=202, response_model=IngestAcceptedResponse)
+async def ingest_image(
+    file: UploadFile,
+    background_tasks: BackgroundTasks,
+    auth: AuthContext = Depends(require_auth),
+    ai: AIServiceClient = Depends(get_ai_client),
+) -> IngestAcceptedResponse:
+    _validate_extension(file.filename or "", IMAGE_EXTENSIONS, "image")
+
+    data = await file.read()
+    if len(data) > IMAGE_MAX_SIZE:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Image exceeds {IMAGE_MAX_SIZE // (1024*1024)}MB limit",
+        )
+
+    result = await ai.ingest_image(auth.subject_id, data, file.filename or "image.jpg")
+    background_tasks.add_task(_auto_persist, ai, result["task_id"], auth.subject_id)
+    return IngestAcceptedResponse(task_id=result["task_id"])
+
+
 # -- Task status polling --
 
 
@@ -238,8 +266,7 @@ async def get_task_status(
                 select(KnowledgeEntry).where(KnowledgeEntry.id == entry_id)
             )
             if existing.scalar_one_or_none() is None:
-                content_type_str = result.get("metadata", {}).get("filename", "")
-                # Infer content type from task context
+                # Infer content type from stored path
                 ct = ContentType.text
                 if result.get("original_content_path"):
                     path = result["original_content_path"]
@@ -247,6 +274,8 @@ async def get_task_status(
                         ct = ContentType.audio
                     elif "/video/" in path:
                         ct = ContentType.video
+                    elif "/image/" in path:
+                        ct = ContentType.image
                     elif "/document/" in path:
                         ct = ContentType.document
 
