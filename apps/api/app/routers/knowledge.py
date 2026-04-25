@@ -1,14 +1,16 @@
+import asyncio
+import logging
 import mimetypes
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, status
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, UploadFile, status
 from fastapi.responses import Response
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.ai_client import AIServiceClient, get_ai_client
 from app.core.auth_guard import AuthContext, require_auth
-from app.core.database import get_db
+from app.core.database import async_session, get_db
 from app.models.knowledge import (
     ContentType,
     IngestAcceptedResponse,
@@ -20,7 +22,69 @@ from app.models.knowledge import (
     TextIngestRequest,
 )
 
+logger = logging.getLogger(__name__)
+
 router = APIRouter(prefix="/api/knowledge", tags=["knowledge"])
+
+
+async def _auto_persist(ai: AIServiceClient, task_id: str, owner_id: str) -> None:
+    """Background: poll AI service until task completes, then write entry to DB.
+
+    This makes file uploads reliable — the client does not need to poll
+    GET /api/knowledge/tasks/{task_id} for the entry to appear.
+    """
+    for _ in range(150):  # poll up to 5 minutes (150 × 2 s)
+        await asyncio.sleep(2)
+        try:
+            task = await ai.get_task_status(task_id)
+        except Exception:
+            continue
+
+        task_status = task.get("status")
+        if task_status == "failed":
+            logger.warning("Ingest task %s failed: %s", task_id, task.get("error"))
+            return
+        if task_status != "completed":
+            continue
+
+        result = task.get("result") or {}
+        entry_id = result.get("entry_id")
+        if not entry_id:
+            return
+
+        async with async_session() as db:
+            existing = await db.execute(
+                select(KnowledgeEntry).where(KnowledgeEntry.id == entry_id)
+            )
+            if existing.scalar_one_or_none() is not None:
+                return  # already persisted (e.g. client polled first)
+
+            path = result.get("original_content_path") or ""
+            if "/audio/" in path:
+                ct = ContentType.audio
+            elif "/video/" in path:
+                ct = ContentType.video
+            elif "/document/" in path:
+                ct = ContentType.document
+            else:
+                ct = ContentType.text
+
+            entry = KnowledgeEntry(
+                id=entry_id,
+                owner_id=owner_id,
+                content_type=ct,
+                original_content_path=result.get("original_content_path"),
+                original_language=result.get("language"),
+                english_translation=result.get("english_translation"),
+                embedding_id=result.get("embedding_id"),
+                metadata_=result.get("metadata"),
+            )
+            db.add(entry)
+            await db.commit()
+            logger.info("Auto-persisted entry %s (task %s)", entry_id, task_id)
+        return
+
+    logger.warning("Auto-persist for task %s timed out", task_id)
 
 # Size limits
 AUDIO_MAX_SIZE = 50 * 1024 * 1024  # 50 MB
@@ -79,6 +143,7 @@ async def ingest_text(
 @router.post("/audio", status_code=202, response_model=IngestAcceptedResponse)
 async def ingest_audio(
     file: UploadFile,
+    background_tasks: BackgroundTasks,
     auth: AuthContext = Depends(require_auth),
     ai: AIServiceClient = Depends(get_ai_client),
 ) -> IngestAcceptedResponse:
@@ -92,6 +157,7 @@ async def ingest_audio(
         )
 
     result = await ai.ingest_audio(auth.subject_id, data, file.filename or "audio")
+    background_tasks.add_task(_auto_persist, ai, result["task_id"], auth.subject_id)
     return IngestAcceptedResponse(task_id=result["task_id"])
 
 
@@ -101,6 +167,7 @@ async def ingest_audio(
 @router.post("/video", status_code=202, response_model=IngestAcceptedResponse)
 async def ingest_video(
     file: UploadFile,
+    background_tasks: BackgroundTasks,
     auth: AuthContext = Depends(require_auth),
     ai: AIServiceClient = Depends(get_ai_client),
 ) -> IngestAcceptedResponse:
@@ -114,6 +181,7 @@ async def ingest_video(
         )
 
     result = await ai.ingest_video(auth.subject_id, data, file.filename or "video")
+    background_tasks.add_task(_auto_persist, ai, result["task_id"], auth.subject_id)
     return IngestAcceptedResponse(task_id=result["task_id"])
 
 
@@ -123,6 +191,7 @@ async def ingest_video(
 @router.post("/document", status_code=202, response_model=IngestAcceptedResponse)
 async def ingest_document(
     file: UploadFile,
+    background_tasks: BackgroundTasks,
     auth: AuthContext = Depends(require_auth),
     ai: AIServiceClient = Depends(get_ai_client),
 ) -> IngestAcceptedResponse:
@@ -136,6 +205,7 @@ async def ingest_document(
         )
 
     result = await ai.ingest_document(auth.subject_id, data, file.filename or "document")
+    background_tasks.add_task(_auto_persist, ai, result["task_id"], auth.subject_id)
     return IngestAcceptedResponse(task_id=result["task_id"])
 
 

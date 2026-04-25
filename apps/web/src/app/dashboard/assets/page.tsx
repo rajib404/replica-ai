@@ -60,7 +60,10 @@ function displayName(entry: KnowledgeEntry): string {
   if (entry.original_content_path) {
     return entry.original_content_path.split('/').pop() ?? entry.original_content_path;
   }
-  const preview = entry.english_translation ?? '';
+  // For English text entries, english_translation is null; content lives in metadata.original_text
+  const preview = entry.english_translation
+    ?? (entry.metadata?.original_text as string | undefined)
+    ?? '';
   return preview.slice(0, 60) + (preview.length > 60 ? '…' : '') || `Entry ${entry.id.slice(0, 8)}`;
 }
 
