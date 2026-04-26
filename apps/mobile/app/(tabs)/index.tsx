@@ -102,6 +102,7 @@ export default function ChatTab() {
   const { ownerId, accessToken } = useAuth();
   const insets = useSafeAreaInsets();
   const flatListRef = useRef<FlatList>(null);
+  const isNearBottomRef = useRef(true);
 
   const [inputText, setInputText] = useState("");
   const [uploading, setUploading] = useState(false);
@@ -183,7 +184,9 @@ export default function ChatTab() {
   );
 
   useEffect(() => {
-    setTimeout(() => flatListRef.current?.scrollToEnd({ animated: true }), 50);
+    if (isNearBottomRef.current) {
+      setTimeout(() => flatListRef.current?.scrollToEnd({ animated: true }), 50);
+    }
   }, [messages.length, !!streamingText, isThinking]);
 
   // ─── Handlers ──────────────────────────────────────────────────────────────
@@ -417,7 +420,11 @@ export default function ChatTab() {
           keyboardShouldPersistTaps="handled"
           style={{ flex: 1 }}
           contentContainerStyle={{ paddingVertical: 12, gap: 4 }}
-          onContentSizeChange={() => flatListRef.current?.scrollToEnd({ animated: false })}
+          onScroll={({ nativeEvent: { contentOffset, contentSize, layoutMeasurement } }) => {
+            const distanceFromBottom = contentSize.height - layoutMeasurement.height - contentOffset.y;
+            isNearBottomRef.current = distanceFromBottom < 80;
+          }}
+          scrollEventThrottle={100}
           ListEmptyComponent={
             !isResponding ? (
               <View className="items-center justify-center py-20 gap-3">

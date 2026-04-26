@@ -17,6 +17,8 @@ import {
   X,
   Download,
   Play,
+  Search,
+  Sparkles,
 } from 'lucide-react';
 import { api } from '@/lib/api';
 import { cn } from '@/lib/utils';
@@ -40,6 +42,20 @@ interface KnowledgeListResponse {
   total: number;
   page: number;
   page_size: number;
+}
+
+interface SearchHit {
+  entry_id: string;
+  content_type: string;
+  score: number;
+  content_preview: string | null;
+  chunk_index?: number;
+}
+
+interface SearchResponse {
+  query: string;
+  results: SearchHit[];
+  total: number;
 }
 
 type AssetCategory = 'document' | 'audio' | 'video' | 'image' | 'text';
@@ -312,6 +328,56 @@ function AssetRow({ entry, onOpen }: { entry: KnowledgeEntry; onOpen: () => void
   );
 }
 
+// ─── Search result row ────────────────────────────────────────────────────────
+
+function SearchResultRow({
+  entry,
+  preview,
+  score,
+  onOpen,
+}: {
+  entry: KnowledgeEntry;
+  preview: string | null;
+  score: number;
+  onOpen: () => void;
+}) {
+  const cat = classify(entry);
+  const meta = CATEGORY_META[cat];
+  const Icon = meta.icon;
+  const name = displayName(entry);
+  const pct = Math.round(score * 100);
+
+  return (
+    <button
+      type="button"
+      onClick={onOpen}
+      className="flex w-full items-start gap-3 rounded-xl border bg-card px-4 py-3 text-left text-sm transition-colors hover:bg-accent/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+    >
+      <div className={cn('mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg', meta.bg)}>
+        <Icon className={cn('h-4 w-4', meta.color)} />
+      </div>
+      <div className="min-w-0 flex-1">
+        <p className="truncate font-medium">{name}</p>
+        {preview && (
+          <p className="mt-1 line-clamp-2 text-xs text-muted-foreground">{preview}</p>
+        )}
+        <div className="mt-1.5 flex items-center gap-2">
+          <span className={cn('rounded-full px-2 py-0.5 text-[10px] font-medium', meta.bg, meta.color)}>
+            {meta.label}
+          </span>
+          <span className="text-[10px] text-muted-foreground">{formatDate(entry.created_at)}</span>
+        </div>
+      </div>
+      <div className="flex shrink-0 flex-col items-end gap-1 pl-2">
+        <span className="text-xs font-semibold text-primary">{pct}%</span>
+        <div className="h-1 w-12 overflow-hidden rounded-full bg-muted">
+          <div className="h-full rounded-full bg-primary" style={{ width: `${pct}%` }} />
+        </div>
+      </div>
+    </button>
+  );
+}
+
 // ─── Category section ─────────────────────────────────────────────────────────
 
 function CategorySection({
@@ -365,6 +431,12 @@ export default function AssetsPage() {
   const [activeFilter, setActiveFilter] = useState<AssetCategory | 'all'>('all');
   const [preview, setPreview] = useState<KnowledgeEntry | null>(null);
 
+  // Search state
+  const [searchQuery, setSearchQuery] = useState('');
+  const [searchHits, setSearchHits] = useState<SearchHit[]>([]);
+  const [searchLoading, setSearchLoading] = useState(false);
+  const searchDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
   const load = useCallback(async () => {
     setLoading(true);
     setError(null);
@@ -379,6 +451,46 @@ export default function AssetsPage() {
   }, []);
 
   useEffect(() => { load(); }, [load]);
+
+  // Debounced semantic search
+  useEffect(() => {
+    if (searchDebounceRef.current) clearTimeout(searchDebounceRef.current);
+    if (!searchQuery.trim()) { setSearchHits([]); return; }
+
+    searchDebounceRef.current = setTimeout(async () => {
+      setSearchLoading(true);
+      try {
+        const resp = await api.post<SearchResponse>('/api/search', {
+          query: searchQuery.trim(),
+          top_k: 20,
+        });
+        setSearchHits(resp.results ?? []);
+      } catch {
+        setSearchHits([]);
+      } finally {
+        setSearchLoading(false);
+      }
+    }, 350);
+
+    return () => {
+      if (searchDebounceRef.current) clearTimeout(searchDebounceRef.current);
+    };
+  }, [searchQuery]);
+
+  // Map search hits → full entries, deduplicated (best-score chunk per entry)
+  const searchResults = useMemo(() => {
+    const byId = new Map(entries.map((e) => [e.id, e]));
+    const seen = new Set<string>();
+    return searchHits
+      .map((h) => ({ entry: byId.get(h.entry_id), hit: h }))
+      .filter((r): r is { entry: KnowledgeEntry; hit: SearchHit } => {
+        if (!r.entry || seen.has(r.hit.entry_id)) return false;
+        seen.add(r.hit.entry_id);
+        return true;
+      });
+  }, [searchHits, entries]);
+
+  const isSearchActive = searchQuery.trim().length > 0;
 
   const grouped = useMemo(() => {
     const map = new Map<AssetCategory, KnowledgeEntry[]>(
@@ -482,8 +594,35 @@ export default function AssetsPage() {
             </div>
           </div>
 
-          {/* Category filter pills — list view */}
-          {view === 'list' && !loading && entries.length > 0 && (
+          {/* AI Search bar */}
+          {!loading && entries.length > 0 && (
+            <div className="relative">
+              <div className="pointer-events-none absolute inset-y-0 left-3 flex items-center">
+                {searchLoading
+                  ? <RefreshCw className="h-4 w-4 animate-spin text-muted-foreground" />
+                  : <Search className="h-4 w-4 text-muted-foreground" />}
+              </div>
+              <input
+                type="text"
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                placeholder="AI search — describe what you're looking for…"
+                className="h-9 w-full rounded-lg border bg-background pl-9 pr-9 text-sm outline-none ring-offset-background placeholder:text-muted-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+              />
+              {searchQuery && (
+                <button
+                  type="button"
+                  onClick={() => setSearchQuery('')}
+                  className="absolute inset-y-0 right-2 flex items-center p-1 text-muted-foreground hover:text-foreground"
+                >
+                  <X className="h-3.5 w-3.5" />
+                </button>
+              )}
+            </div>
+          )}
+
+          {/* Category filter pills — list view (hidden when searching) */}
+          {view === 'list' && !loading && entries.length > 0 && !isSearchActive && (
             <div className="flex flex-wrap gap-2">
               <button
                 type="button"
@@ -537,7 +676,50 @@ export default function AssetsPage() {
             </div>
           )}
 
-          {!loading && !error && view === 'category' && (
+          {/* Search results */}
+          {!loading && !error && isSearchActive && (
+            <div className="space-y-3">
+              {searchLoading && searchResults.length === 0 && (
+                <div className="flex items-center justify-center py-16">
+                  <RefreshCw className="h-6 w-6 animate-spin text-muted-foreground" />
+                </div>
+              )}
+
+              {!searchLoading && searchResults.length === 0 && (
+                <div className="flex flex-col items-center gap-3 py-16 text-center">
+                  <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-muted">
+                    <Sparkles className="h-6 w-6 text-muted-foreground" />
+                  </div>
+                  <p className="text-sm font-medium">No matching assets found</p>
+                  <p className="max-w-xs text-xs text-muted-foreground">
+                    Try describing the content differently — the AI search looks for meaning, not just keywords.
+                  </p>
+                </div>
+              )}
+
+              {searchResults.length > 0 && (
+                <>
+                  <div className="flex items-center gap-2 pb-1">
+                    <Sparkles className="h-3.5 w-3.5 text-primary" />
+                    <p className="text-xs text-muted-foreground">
+                      {searchResults.length} result{searchResults.length !== 1 ? 's' : ''} for &ldquo;{searchQuery}&rdquo;
+                    </p>
+                  </div>
+                  {searchResults.map(({ entry, hit }) => (
+                    <SearchResultRow
+                      key={hit.entry_id}
+                      entry={entry}
+                      preview={hit.content_preview}
+                      score={hit.score}
+                      onOpen={() => setPreview(entry)}
+                    />
+                  ))}
+                </>
+              )}
+            </div>
+          )}
+
+          {!loading && !error && !isSearchActive && view === 'category' && (
             <div className="space-y-8">
               {CATEGORY_ORDER.map((cat) => (
                 <CategorySection
@@ -550,7 +732,7 @@ export default function AssetsPage() {
             </div>
           )}
 
-          {!loading && !error && view === 'list' && (
+          {!loading && !error && !isSearchActive && view === 'list' && (
             <div className="space-y-2">
               {chronological.length === 0 ? (
                 <p className="py-8 text-center text-sm text-muted-foreground">No items here.</p>

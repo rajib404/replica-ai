@@ -102,6 +102,7 @@ export default function ChatScreen() {
   const [recording, setRecording] = useState<Audio.Recording | null>(null);
   const [isRecording, setIsRecording] = useState(false);
   const flatListRef = useRef<FlatList>(null);
+  const isNearBottomRef = useRef(true);
 
   const { messages, streamingText, connectionState, degraded, connect, disconnect, sendMessage } =
     useChat(ownerId ?? "", accessToken ?? "", id === "new" ? undefined : id);
@@ -112,7 +113,9 @@ export default function ChatScreen() {
   }, [ownerId, accessToken]);
 
   useEffect(() => {
-    setTimeout(() => flatListRef.current?.scrollToEnd({ animated: true }), 50);
+    if (isNearBottomRef.current) {
+      setTimeout(() => flatListRef.current?.scrollToEnd({ animated: true }), 50);
+    }
   }, [messages.length, !!streamingText]);
 
   const handleSend = () => {
@@ -316,7 +319,11 @@ export default function ChatScreen() {
           keyboardShouldPersistTaps="handled"
           style={{ flex: 1 }}
           contentContainerStyle={{ paddingVertical: 12, gap: 4 }}
-          onContentSizeChange={() => flatListRef.current?.scrollToEnd({ animated: false })}
+          onScroll={({ nativeEvent: { contentOffset, contentSize, layoutMeasurement } }) => {
+            const distanceFromBottom = contentSize.height - layoutMeasurement.height - contentOffset.y;
+            isNearBottomRef.current = distanceFromBottom < 80;
+          }}
+          scrollEventThrottle={100}
           ListEmptyComponent={
             !isStreaming ? (
               <View className="items-center justify-center py-20 gap-2">
