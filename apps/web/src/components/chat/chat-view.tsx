@@ -7,10 +7,9 @@ import { type ChatMessage } from '@/components/chat/message-bubble';
 import { SwipeableMessage } from '@/components/chat/swipeable-message';
 import { ChatInput } from '@/components/chat/chat-input';
 import { ChallengeModal, LockoutScreen } from '@/components/chat/challenge-modal';
-import { VoiceChatButton } from '@/components/chat/voice-chat-button';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Badge } from '@/components/ui/badge';
-import { Bot, Wifi, WifiOff, Brain, AlertCircle, Mic, Clock } from 'lucide-react';
+import { Bot, Wifi, WifiOff, Brain, AlertCircle, Clock } from 'lucide-react';
 import {
   useChatSocket,
   type ConnectionStatus,
@@ -18,7 +17,6 @@ import {
   type ChallengeData,
   type ChallengeResultData,
 } from '@/lib/use-chat-socket';
-import { useVoiceSocket, type VoiceStatus } from '@/lib/use-voice-socket';
 import { api } from '@/lib/api';
 import { useOnlineStatus } from '@/lib/hooks/use-online-status';
 import { useHaptic } from '@/lib/hooks/use-haptic';
@@ -37,10 +35,6 @@ const VideoCallView = dynamic(
 );
 const VideoMessageRecorder = dynamic(
   () => import('@/components/chat/video-message-recorder').then((m) => m.VideoMessageRecorder),
-  { ssr: false },
-);
-const VoiceSettingsPanel = dynamic(
-  () => import('@/components/chat/voice-settings-panel').then((m) => m.VoiceSettingsPanel),
   { ssr: false },
 );
 
@@ -82,14 +76,8 @@ export function ChatView({ ownerId }: ChatViewProps) {
   const [activeChallenge, setActiveChallenge] = useState<ChallengeData | null>(null);
   const [challengeResult, setChallengeResult] = useState<ChallengeResultData | null>(null);
   const [lockoutMessage, setLockoutMessage] = useState<string | null>(null);
-  const [voiceMode, setVoiceMode] = useState(false);
-  const [voiceStatus, setVoiceStatus] = useState<VoiceStatus>('idle');
-  const [transcript, setTranscript] = useState<string>('');
   const [videoCallActive, setVideoCallActive] = useState(false);
   const [videoRecorderOpen, setVideoRecorderOpen] = useState(false);
-  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
-  const mediaStreamRef = useRef<MediaStream | null>(null);
-  const audioPlayerRef = useRef<HTMLAudioElement | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
 
   const scrollToBottom = useCallback(() => {
@@ -319,139 +307,6 @@ export function ChatView({ ownerId }: ChatViewProps) {
     onChallengeResult: handleChallengeResult,
     onLockout: handleLockout,
   });
-
-  // ── Voice chat ──
-
-  const handleVoiceTranscript = useCallback((t: { text: string; isFinal: boolean }) => {
-    setTranscript(t.text);
-    if (t.isFinal && t.text) {
-      // Add user message from voice transcript
-      setMessages((prev) => [
-        ...prev,
-        {
-          id: `voice-user-${Date.now()}`,
-          role: 'user',
-          content: t.text,
-          timestamp: new Date(),
-        },
-      ]);
-    }
-  }, []);
-
-  const handleVoiceResponseText = useCallback(
-    (resp: {
-      text: string;
-      messageId: string;
-      threadId: string;
-      sources: ChatSource[];
-      isLearning: boolean;
-    }) => {
-      setThreadId(resp.threadId);
-      setMessages((prev) => [
-        ...prev,
-        {
-          id: resp.messageId,
-          role: 'assistant',
-          content: resp.text,
-          timestamp: new Date(),
-          sources: resp.sources,
-        },
-      ]);
-      if (resp.isLearning) setIsLearning(true);
-    },
-    [],
-  );
-
-  const handleVoiceAudioOut = useCallback(
-    (_meta: { format: string; durationMs: number }, audioBlob: Blob) => {
-      // Auto-play the TTS response
-      const url = URL.createObjectURL(audioBlob);
-      const audio = new Audio(url);
-      audioPlayerRef.current = audio;
-      audio.play().catch(() => {});
-      audio.onended = () => URL.revokeObjectURL(url);
-    },
-    [],
-  );
-
-  const handleVoiceDone = useCallback((messageId: string, newThreadId: string) => {
-    setThreadId(newThreadId);
-    setTranscript('');
-  }, []);
-
-  const handleVoiceStatusChange = useCallback((s: VoiceStatus) => {
-    setVoiceStatus(s);
-  }, []);
-
-  const handleVoiceError = useCallback((detail: string) => {
-    setVoiceStatus('idle');
-    handleError(detail);
-  }, [handleError]);
-
-  const { connectionStatus: voiceConnectionStatus, sendAudioChunk, startAudio, endAudio, cancelAudio } =
-    useVoiceSocket({
-      ownerId: resolvedOwnerId,
-      enabled: voiceMode,
-      onTranscript: handleVoiceTranscript,
-      onResponseText: handleVoiceResponseText,
-      onAudioOut: handleVoiceAudioOut,
-      onDone: handleVoiceDone,
-      onStatusChange: handleVoiceStatusChange,
-      onError: handleVoiceError,
-    });
-
-  const startRecording = useCallback(async () => {
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({
-        audio: { sampleRate: 16000, channelCount: 1, echoCancellation: true, noiseSuppression: true },
-      });
-      mediaStreamRef.current = stream;
-
-      const recorder = new MediaRecorder(stream, {
-        mimeType: MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
-          ? 'audio/webm;codecs=opus'
-          : 'audio/webm',
-      });
-      mediaRecorderRef.current = recorder;
-
-      // Signal server: start audio
-      startAudio('webm');
-
-      recorder.ondataavailable = (e) => {
-        if (e.data.size > 0) {
-          e.data.arrayBuffer().then((buf) => sendAudioChunk(buf));
-        }
-      };
-
-      recorder.start(250); // Send chunks every 250ms
-    } catch {
-      handleError('Microphone access denied');
-    }
-  }, [startAudio, sendAudioChunk, handleError]);
-
-  const stopRecording = useCallback(() => {
-    if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
-      mediaRecorderRef.current.stop();
-    }
-    if (mediaStreamRef.current) {
-      mediaStreamRef.current.getTracks().forEach((t) => t.stop());
-      mediaStreamRef.current = null;
-    }
-    endAudio();
-  }, [endAudio]);
-
-  const cancelRecording = useCallback(() => {
-    if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
-      mediaRecorderRef.current.stop();
-    }
-    if (mediaStreamRef.current) {
-      mediaStreamRef.current.getTracks().forEach((t) => t.stop());
-      mediaStreamRef.current = null;
-    }
-    cancelAudio();
-    setVoiceStatus('idle');
-    setTranscript('');
-  }, [cancelAudio]);
 
   function handleSend(text: string) {
     const userMessage: ChatMessage = {
@@ -704,6 +559,12 @@ export function ChatView({ ownerId }: ChatViewProps) {
     }
   }
 
+  async function handleVoiceClip(blob: Blob) {
+    const ext = blob.type.includes('webm') ? '.webm' : '.m4a';
+    const file = new File([blob], `voice${ext}`, { type: blob.type });
+    await handleFileAttach(file);
+  }
+
   const handleVideoCallMessage = useCallback(
     (msg: {
       text: string;
@@ -777,23 +638,14 @@ export function ChatView({ ownerId }: ChatViewProps) {
       )}
 
       {/* Status bar */}
-      <div className="flex items-center justify-between border-b px-4 py-2">
-        <div className="flex items-center gap-2">
-          <StatusIndicator status={status} />
-          {voiceMode && (
-            <Badge variant="outline" className="gap-1 text-xs">
-              <Mic className="h-3 w-3" />
-              Voice {voiceConnectionStatus === 'connected' ? 'ready' : voiceConnectionStatus}
-            </Badge>
-          )}
-          {isLearning && (
-            <Badge variant="secondary" className="gap-1 text-xs">
-              <Brain className="h-3 w-3" />
-              Learning from you
-            </Badge>
-          )}
-        </div>
-        {voiceMode && <VoiceSettingsPanel />}
+      <div className="flex items-center border-b px-4 py-2 gap-2">
+        <StatusIndicator status={status} />
+        {isLearning && (
+          <Badge variant="secondary" className="gap-1 text-xs">
+            <Brain className="h-3 w-3" />
+            Learning from you
+          </Badge>
+        )}
       </div>
 
       {/* Messages area */}
@@ -831,32 +683,13 @@ export function ChatView({ ownerId }: ChatViewProps) {
         </div>
       </ScrollArea>
 
-      {/* Voice mode: push-to-talk + transcript */}
-      {voiceMode && (
-        <div className="border-t bg-card px-4 py-6">
-          <div className="mx-auto flex max-w-3xl flex-col items-center gap-3">
-            {transcript && (
-              <p className="text-sm text-muted-foreground italic">&ldquo;{transcript}&rdquo;</p>
-            )}
-            <VoiceChatButton
-              voiceStatus={voiceStatus}
-              onStartRecording={startRecording}
-              onStopRecording={stopRecording}
-              onCancelRecording={cancelRecording}
-              disabled={!!lockoutMessage || voiceConnectionStatus !== 'connected'}
-            />
-          </div>
-        </div>
-      )}
-
       {/* Text Input */}
       <ChatInput
         onSend={handleSend}
         onFileAttach={handleFileAttach}
-        onVoiceToggle={() => setVoiceMode((v) => !v)}
+        onVoiceClip={handleVoiceClip}
         onVideoCall={() => setVideoCallActive(true)}
         onVideoRecord={() => setVideoRecorderOpen(true)}
-        voiceEnabled={voiceMode}
         disabled={(isTyping && !streamingMessageId) || !!lockoutMessage}
         initialText={sharedDraft}
       />

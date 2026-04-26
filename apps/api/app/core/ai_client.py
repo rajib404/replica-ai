@@ -281,6 +281,17 @@ class AIServiceClient:
         return resp.json()
 
     @ollama_retry
+    async def transcribe(self, file_bytes: bytes, filename: str) -> dict:
+        """Synchronously transcribe audio. Returns {text, language}."""
+        client = await self._get_client()
+        resp = await client.post(
+            "/transcribe",
+            files={"file": (filename, file_bytes)},
+        )
+        resp.raise_for_status()
+        return resp.json()
+
+    @ollama_retry
     async def ingest_image(
         self, owner_id: str, file_bytes: bytes, filename: str
     ) -> dict:

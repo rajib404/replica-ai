@@ -5,6 +5,7 @@ from pathlib import Path
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, UploadFile, status
 from fastapi.responses import Response
+from pydantic import BaseModel
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -107,6 +108,34 @@ def _validate_extension(filename: str, allowed: set[str], label: str) -> None:
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"Unsupported {label} format '{ext}'. Allowed: {', '.join(sorted(allowed))}",
         )
+
+
+# -- Transcription (synchronous, auth-gated) --
+
+
+class TranscribeResponse(BaseModel):
+    text: str
+    language: str
+
+
+@router.post("/transcribe", response_model=TranscribeResponse)
+async def transcribe_audio(
+    file: UploadFile,
+    auth: AuthContext = Depends(require_auth),
+    ai: AIServiceClient = Depends(get_ai_client),
+) -> TranscribeResponse:
+    """Transcribe an audio file and return the text + detected language."""
+    _validate_extension(file.filename or "", AUDIO_EXTENSIONS, "audio")
+
+    data = await file.read()
+    if len(data) > AUDIO_MAX_SIZE:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Audio file exceeds {AUDIO_MAX_SIZE // (1024 * 1024)}MB limit",
+        )
+
+    result = await ai.transcribe(data, file.filename or "audio.m4a")
+    return TranscribeResponse(text=result["text"], language=result["language"])
 
 
 # -- Text ingest (synchronous) --

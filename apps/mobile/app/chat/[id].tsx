@@ -118,7 +118,40 @@ export default function ChatScreen() {
     }
   }, [messages.length, !!streamingText]);
 
-  const handleSend = () => {
+  const handleSend = async () => {
+    if (isRecording && recording) {
+      setIsRecording(false);
+      await recording.stopAndUnloadAsync();
+      const uri = recording.getURI();
+      setRecording(null);
+      if (!uri) return;
+      setUploading(true);
+      try {
+        const form = new FormData();
+        form.append("file", { uri, name: "voice.m4a", type: "audio/m4a" } as any);
+        const { data } = await apiClient.post<{ text: string }>(
+          ENDPOINTS.KNOWLEDGE_TRANSCRIBE,
+          form,
+          { headers: { "Content-Type": "multipart/form-data" } }
+        );
+        const transcribed = data.text?.trim();
+        if (transcribed) {
+          setInputText("");
+          sendMessage(transcribed);
+        }
+        // Upload original audio as asset in background
+        const audioForm = new FormData();
+        audioForm.append("file", { uri, name: "voice.m4a", type: "audio/m4a" } as any);
+        apiClient.post(ENDPOINTS.KNOWLEDGE_INGEST_AUDIO, audioForm, {
+          headers: { "Content-Type": "multipart/form-data" },
+        }).catch(() => {});
+      } catch (e: any) {
+        Alert.alert("Voice send failed", e?.message ?? "Unknown error");
+      } finally {
+        setUploading(false);
+      }
+      return;
+    }
     if (!inputText.trim()) return;
     sendMessage(inputText);
     setInputText("");
@@ -204,35 +237,24 @@ export default function ChatScreen() {
 
   const handleVoiceToggle = async () => {
     Keyboard.dismiss();
-    if (isRecording && recording) {
+    if (isRecording) {
+      // Cancel — stop without sending
       setIsRecording(false);
-      await recording.stopAndUnloadAsync();
-      const uri = recording.getURI();
-      setRecording(null);
-      if (!uri) return;
-      setUploading(true);
-      try {
-        const form = new FormData();
-        form.append("file", { uri, name: "voice.m4a", type: "audio/m4a" } as any);
-        await apiClient.post(ENDPOINTS.KNOWLEDGE_INGEST_AUDIO, form, {
-          headers: { "Content-Type": "multipart/form-data" },
-        });
-        Alert.alert("Uploaded", "Voice note added to knowledge base.");
-      } catch (e: any) {
-        Alert.alert("Upload failed", e?.message ?? "Unknown error");
-      } finally {
-        setUploading(false);
+      if (recording) {
+        await recording.stopAndUnloadAsync();
+        setRecording(null);
       }
-    } else {
-      const perm = await Audio.requestPermissionsAsync();
-      if (!perm.granted) { Alert.alert("Permission required", "Allow microphone access to record."); return; }
-      await Audio.setAudioModeAsync({ allowsRecordingIOS: true, playsInSilentModeIOS: true });
-      const { recording: rec } = await Audio.Recording.createAsync(
-        Audio.RecordingOptionsPresets.HIGH_QUALITY
-      );
-      setRecording(rec);
-      setIsRecording(true);
+      setInputText("");
+      return;
     }
+    const perm = await Audio.requestPermissionsAsync();
+    if (!perm.granted) { Alert.alert("Permission required", "Allow microphone access to record."); return; }
+    await Audio.setAudioModeAsync({ allowsRecordingIOS: true, playsInSilentModeIOS: true });
+    const { recording: rec } = await Audio.Recording.createAsync(
+      Audio.RecordingOptionsPresets.HIGH_QUALITY
+    );
+    setRecording(rec);
+    setIsRecording(true);
   };
 
   const handleVideoCall = () => {
@@ -275,6 +297,7 @@ export default function ChatScreen() {
 
   const isStreaming = streamingText.length > 0;
   const canSend = connectionState === "connected" && !isStreaming && !uploading;
+  const canSendNow = canSend && (!!inputText.trim() || isRecording);
 
   return (
     <KeyboardAvoidingView
@@ -370,11 +393,11 @@ export default function ChatScreen() {
             </Pressable>
             <Pressable
               onPress={handleVoiceToggle}
-              disabled={uploading}
+              disabled={uploading && !isRecording}
               className="w-8 h-8 items-center justify-center active:opacity-60 disabled:opacity-40"
             >
               <Ionicons
-                name={isRecording ? "stop-circle" : "mic-outline"}
+                name={isRecording ? "close-circle" : "mic-outline"}
                 size={20}
                 color={isRecording ? "#ef4444" : "#71717a"}
               />
@@ -396,21 +419,29 @@ export default function ChatScreen() {
 
           {/* Text + send row */}
           <View className="flex-row items-end gap-2">
-            <TextInput
-              className="flex-1 bg-zinc-900 text-white rounded-2xl px-4 py-3 border border-zinc-800 max-h-28"
-              placeholder="Message…"
-              placeholderTextColor="#71717a"
-              value={inputText}
-              onChangeText={setInputText}
-              multiline
-              returnKeyType="send"
-              onSubmitEditing={handleSend}
-              blurOnSubmit={false}
-              editable={canSend}
-            />
+            <View style={{ flex: 1, position: "relative" }}>
+              {isRecording && (
+                <View style={{ position: "absolute", right: 12, top: 12, zIndex: 1, flexDirection: "row", alignItems: "center", gap: 4 }}>
+                  <View style={{ width: 6, height: 6, borderRadius: 3, backgroundColor: "#ef4444" }} />
+                  <Text style={{ color: "#ef4444", fontSize: 11 }}>Listening…</Text>
+                </View>
+              )}
+              <TextInput
+                className="bg-zinc-900 text-white rounded-2xl px-4 py-3 border border-zinc-800 max-h-28"
+                placeholder={isRecording ? "Speak now…" : "Message…"}
+                placeholderTextColor={isRecording ? "#ef4444" : "#71717a"}
+                value={inputText}
+                onChangeText={setInputText}
+                multiline
+                returnKeyType="send"
+                onSubmitEditing={handleSend}
+                blurOnSubmit={false}
+                editable={canSend && !isRecording}
+              />
+            </View>
             <Pressable
               onPress={handleSend}
-              disabled={!inputText.trim() || !canSend}
+              disabled={!canSendNow}
               className="bg-brand rounded-full w-11 h-11 items-center justify-center active:opacity-70 disabled:opacity-40"
             >
               <Ionicons name="arrow-up" size={20} color="#fff" />

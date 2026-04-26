@@ -9,6 +9,7 @@ export const ENDPOINTS = {
   CHAT_THREAD_MESSAGES: (id: string) => `/api/chat/threads/${id}/messages`,
 
   // Knowledge
+  KNOWLEDGE_TRANSCRIBE: "/api/knowledge/transcribe",
   KNOWLEDGE_INGEST_TEXT: "/api/knowledge/text",
   KNOWLEDGE_INGEST_AUDIO: "/api/knowledge/audio",
   KNOWLEDGE_INGEST_VIDEO: "/api/knowledge/video",

@@ -1,9 +1,12 @@
+import asyncio
 import mimetypes
+import tempfile
 import uuid
 from pathlib import Path
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, UploadFile, status
 from fastapi.responses import Response
+from pydantic import BaseModel
 import redis.asyncio as aioredis
 
 from app.core.redis import get_redis
@@ -175,6 +178,40 @@ async def ingest_image(
         owner_id, task_id, data, file.filename or "image.jpg", r,
     )
     return IngestAcceptedResponse(task_id=task_id)
+
+
+# -- Synchronous transcription --
+
+
+class TranscribeResponse(BaseModel):
+    text: str
+    language: str
+
+
+@router.post("/transcribe", response_model=TranscribeResponse)
+async def transcribe_audio(file: UploadFile) -> TranscribeResponse:
+    """Synchronous: transcribe audio and return the text + detected language."""
+    _validate_extension(file.filename or "", AUDIO_EXTENSIONS, "audio")
+
+    data = await file.read()
+    if len(data) > AUDIO_MAX_SIZE:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Audio file exceeds {AUDIO_MAX_SIZE // (1024 * 1024)}MB limit",
+        )
+
+    suffix = Path(file.filename or "audio.m4a").suffix or ".m4a"
+    with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
+        tmp.write(data)
+        tmp_path = tmp.name
+
+    try:
+        loop = asyncio.get_event_loop()
+        text, language = await loop.run_in_executor(None, _ingestor._transcribe_audio, tmp_path)
+    finally:
+        Path(tmp_path).unlink(missing_ok=True)
+
+    return TranscribeResponse(text=text, language=language)
 
 
 # -- File serving (internal — called by API service, not exposed to internet) --

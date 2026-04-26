@@ -1,7 +1,7 @@
 'use client';
 
-import { useState, useRef, useEffect, type KeyboardEvent, type ChangeEvent } from 'react';
-import { Mic, Video, Film, Paperclip, Send, X, FileText, Camera } from 'lucide-react';
+import { useState, useRef, useEffect, useCallback, type KeyboardEvent, type ChangeEvent } from 'react';
+import { Mic, MicOff, Video, Film, Paperclip, Send, X, FileText, Camera } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { Badge } from '@/components/ui/badge';
@@ -11,10 +11,9 @@ import { useHaptic } from '@/lib/hooks/use-haptic';
 interface ChatInputProps {
   onSend: (text: string) => void;
   onFileAttach?: (file: File) => void;
-  onVoiceToggle?: () => void;
+  onVoiceClip?: (blob: Blob) => void;
   onVideoCall?: () => void;
   onVideoRecord?: () => void;
-  voiceEnabled?: boolean;
   disabled?: boolean;
   initialText?: string;
 }
@@ -26,21 +25,22 @@ const ALLOWED_FILE_TYPES = [
   '.jpg', '.jpeg', '.png', '.gif', '.webp', '.heic', '.heif',
 ];
 
-export function ChatInput({ onSend, onFileAttach, onVoiceToggle, onVideoCall, onVideoRecord, voiceEnabled, disabled, initialText }: ChatInputProps) {
+export function ChatInput({ onSend, onFileAttach, onVoiceClip, onVideoCall, onVideoRecord, disabled, initialText }: ChatInputProps) {
   const [text, setText] = useState(initialText ?? '');
   const [attachedFile, setAttachedFile] = useState<File | null>(null);
+  const [isRecording, setIsRecording] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const cameraInputRef = useRef<HTMLInputElement>(null);
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const audioChunksRef = useRef<Blob[]>([]);
+  const recognitionRef = useRef<SpeechRecognition | null>(null);
   const isTouchDevice = useIsTouchDevice();
   const haptic = useHaptic();
 
-  // Apply incoming initialText (e.g. share-target redirect) without
-  // clobbering in-progress typing.
   useEffect(() => {
     if (initialText && initialText !== text) {
       setText(initialText);
-      // Resize textarea to fit on next paint.
       requestAnimationFrame(() => {
         const el = textareaRef.current;
         if (el) {
@@ -53,11 +53,107 @@ export function ChatInput({ onSend, onFileAttach, onVoiceToggle, onVideoCall, on
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [initialText]);
 
+  // Stop recording on unmount
+  useEffect(() => {
+    return () => {
+      stopRecording(false);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const stopRecording = useCallback((emitClip = true) => {
+    recognitionRef.current?.stop();
+    recognitionRef.current = null;
+
+    const recorder = mediaRecorderRef.current;
+    if (!recorder || recorder.state === 'inactive') {
+      mediaRecorderRef.current = null;
+      setIsRecording(false);
+      return;
+    }
+
+    recorder.onstop = () => {
+      if (emitClip && audioChunksRef.current.length > 0) {
+        const blob = new Blob(audioChunksRef.current, { type: recorder.mimeType });
+        onVoiceClip?.(blob);
+      }
+      audioChunksRef.current = [];
+      mediaRecorderRef.current = null;
+    };
+
+    recorder.stop();
+    recorder.stream.getTracks().forEach((t) => t.stop());
+    setIsRecording(false);
+  }, [onVoiceClip]);
+
+  const startRecording = useCallback(async () => {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+
+      // MediaRecorder for the audio blob
+      const mimeType = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
+        ? 'audio/webm;codecs=opus'
+        : 'audio/webm';
+      const recorder = new MediaRecorder(stream, { mimeType });
+      audioChunksRef.current = [];
+      recorder.ondataavailable = (e) => {
+        if (e.data.size > 0) audioChunksRef.current.push(e.data);
+      };
+      recorder.start(250);
+      mediaRecorderRef.current = recorder;
+
+      // SpeechRecognition for live transcription
+      const SpeechRecognitionImpl =
+        (window as any).SpeechRecognition ?? (window as any).webkitSpeechRecognition;
+      if (SpeechRecognitionImpl) {
+        const recognition: SpeechRecognition = new SpeechRecognitionImpl();
+        recognition.continuous = true;
+        recognition.interimResults = true;
+        recognition.lang = 'en-US';
+
+        let finalTranscript = '';
+        recognition.onresult = (e: SpeechRecognitionEvent) => {
+          let interim = '';
+          for (let i = e.resultIndex; i < e.results.length; i++) {
+            const res = e.results[i];
+            if (res.isFinal) {
+              finalTranscript += res[0].transcript;
+            } else {
+              interim += res[0].transcript;
+            }
+          }
+          setText(finalTranscript + interim);
+          resizeTextarea();
+        };
+        recognition.start();
+        recognitionRef.current = recognition;
+      }
+
+      setIsRecording(true);
+      haptic.light();
+    } catch {
+      // Microphone denied — silently ignore
+    }
+  }, [haptic]);
+
+  function resizeTextarea() {
+    const el = textareaRef.current;
+    if (el) {
+      el.style.height = 'auto';
+      el.style.height = Math.min(el.scrollHeight, 160) + 'px';
+    }
+  }
+
   function handleSend() {
     const trimmed = text.trim();
     if (!trimmed && !attachedFile) return;
 
     haptic.light();
+
+    // Stop recording and emit clip before sending
+    if (isRecording) {
+      stopRecording(true);
+    }
 
     if (attachedFile) {
       onFileAttach?.(attachedFile);
@@ -80,11 +176,7 @@ export function ChatInput({ onSend, onFileAttach, onVoiceToggle, onVideoCall, on
   }
 
   function handleInput() {
-    const el = textareaRef.current;
-    if (el) {
-      el.style.height = 'auto';
-      el.style.height = Math.min(el.scrollHeight, 160) + 'px';
-    }
+    resizeTextarea();
   }
 
   function handleFileSelect(e: ChangeEvent<HTMLInputElement>) {
@@ -92,7 +184,6 @@ export function ChatInput({ onSend, onFileAttach, onVoiceToggle, onVideoCall, on
     if (file) {
       setAttachedFile(file);
     }
-    // Reset input so same file can be re-selected
     if (fileInputRef.current) {
       fileInputRef.current.value = '';
     }
@@ -114,6 +205,8 @@ export function ChatInput({ onSend, onFileAttach, onVoiceToggle, onVideoCall, on
     if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)}KB`;
     return `${(bytes / (1024 * 1024)).toFixed(1)}MB`;
   }
+
+  const canSend = (!!text.trim() || !!attachedFile || isRecording) && !disabled;
 
   return (
     <div className="border-t bg-card p-4">
@@ -192,16 +285,16 @@ export function ChatInput({ onSend, onFileAttach, onVoiceToggle, onVideoCall, on
           <Tooltip>
             <TooltipTrigger asChild>
               <Button
-                variant={voiceEnabled ? 'default' : 'ghost'}
+                variant={isRecording ? 'destructive' : 'ghost'}
                 size="icon"
                 className="h-9 w-9 shrink-0"
-                onClick={onVoiceToggle}
+                onClick={isRecording ? () => stopRecording(true) : startRecording}
                 disabled={disabled}
               >
-                <Mic className="h-4 w-4" />
+                {isRecording ? <MicOff className="h-4 w-4" /> : <Mic className="h-4 w-4" />}
               </Button>
             </TooltipTrigger>
-            <TooltipContent>{voiceEnabled ? 'Exit voice mode' : 'Voice mode'}</TooltipContent>
+            <TooltipContent>{isRecording ? 'Stop recording' : 'Record voice'}</TooltipContent>
           </Tooltip>
 
           <Tooltip>
@@ -237,16 +330,22 @@ export function ChatInput({ onSend, onFileAttach, onVoiceToggle, onVideoCall, on
 
         {/* Text input */}
         <div className="relative flex-1">
+          {isRecording && (
+            <span className="absolute right-3 top-2 flex items-center gap-1 text-xs text-red-500">
+              <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-red-500" />
+              Listening…
+            </span>
+          )}
           <textarea
             ref={textareaRef}
             value={text}
             onChange={(e) => setText(e.target.value)}
             onKeyDown={handleKeyDown}
             onInput={handleInput}
-            placeholder="Type a message..."
+            placeholder={isRecording ? 'Speak now…' : 'Type a message…'}
             rows={1}
             disabled={disabled}
-            className="w-full resize-none rounded-lg border bg-background px-4 py-2.5 text-sm ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50"
+            className="w-full resize-none rounded-lg border bg-background px-4 py-2.5 pr-20 text-sm ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50"
           />
         </div>
 
@@ -255,7 +354,7 @@ export function ChatInput({ onSend, onFileAttach, onVoiceToggle, onVideoCall, on
           size="icon"
           className="h-9 w-9 shrink-0"
           onClick={handleSend}
-          disabled={(!text.trim() && !attachedFile) || disabled}
+          disabled={!canSend}
         >
           <Send className="h-4 w-4" />
         </Button>
