@@ -177,8 +177,17 @@ export function useChat(ownerId: string, _accessToken: string, initialThreadId?:
     [activeThreadId]
   );
 
-  const loadHistory = useCallback((history: ChatMessage[]) => {
-    setMessages(history);
+  const loadHistory = useCallback((history: ChatMessage[], merge = false) => {
+    if (!merge) {
+      setMessages(history);
+      return;
+    }
+    setMessages((prev) => {
+      const apiIds = new Set(history.map((m) => m.id));
+      // Keep messages sent this session that the server hasn't returned yet
+      const sessionOnly = prev.filter((m) => m.id.startsWith("user-") && !apiIds.has(m.id));
+      return [...history, ...sessionOnly];
+    });
   }, []);
 
   return {

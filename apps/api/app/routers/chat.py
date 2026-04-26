@@ -308,12 +308,19 @@ async def send_message(
             },
         )
 
+    # If no thread_id supplied, continue in the most recent thread
+    resolved_thread_id = body.thread_id
+    if not resolved_thread_id:
+        recent, _ = await conv.list_threads(owner_id=auth.subject_id, db=db, page=1, page_size=1)
+        if recent:
+            resolved_thread_id = recent[0].id
+
     response_text, msg_id, thread_id, sources, is_learning = await _process_message(
         owner_id=auth.subject_id,
         participant_type=participant_type,
         participant_name=participant_name,
         text=body.message,
-        thread_id=body.thread_id,
+        thread_id=resolved_thread_id,
         db=db,
         r=r,
         ai=ai,
@@ -522,6 +529,15 @@ async def websocket_chat(
 
             async with async_session() as db:
                 r = redis_client
+
+                # If no thread_id from client or prior session, reuse the
+                # owner's most recent thread rather than creating a new one.
+                if not requested_thread_id:
+                    recent, _ = await conv.list_threads(
+                        owner_id=owner_id, db=db, page=1, page_size=1
+                    )
+                    if recent:
+                        requested_thread_id = recent[0].id
 
                 # Identity guard check
                 guard_result = await guard.check(

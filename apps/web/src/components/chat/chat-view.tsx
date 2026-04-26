@@ -112,6 +112,55 @@ export function ChatView({ ownerId }: ChatViewProps) {
     return () => clearTimeout(timer);
   }, [isLearning]);
 
+  // On mount: load the latest thread from the server so cross-device sync works.
+  // This runs once (no deps apart from resolvedOwnerId) and sets threadId so
+  // the IDB hydration below can also populate any locally cached messages.
+  useEffect(() => {
+    if (!resolvedOwnerId) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const threadsData = await api.get<{ threads: Array<{ id: string }> }>('/api/chat/threads');
+        const threads = threadsData.threads ?? [];
+        if (cancelled || threads.length === 0) return;
+
+        const latestId = threads[0].id;
+        setThreadId(latestId);
+
+        const msgsData = await api.get<{
+          messages: Array<{ id: string; role: string; content_text: string | null; created_at: string }>;
+        }>(`/api/chat/threads/${latestId}/messages`);
+
+        if (cancelled) return;
+
+        const apiMessages: ChatMessage[] = (msgsData.messages ?? [])
+          .filter((m) => m.content_text)
+          .map((m) => ({
+            id: m.id,
+            role: m.role as 'user' | 'assistant',
+            content: m.content_text!,
+            timestamp: new Date(m.created_at),
+          }));
+
+        if (apiMessages.length === 0) return;
+
+        apiMessages.forEach((m) => lastPersistedRef.current.add(m.id));
+        setMessages((prev) => {
+          const seen = new Set(prev.map((m) => m.id));
+          const merged = [...prev];
+          for (const m of apiMessages) {
+            if (!seen.has(m.id)) merged.push(m);
+          }
+          merged.sort((a, b) => a.timestamp.getTime() - b.timestamp.getTime());
+          return merged;
+        });
+      } catch {
+        // Network error or no threads — leave initial messages as-is
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [resolvedOwnerId]);
+
   // Hydrate from IDB on mount — instant offline restore.
   useEffect(() => {
     let cancelled = false;

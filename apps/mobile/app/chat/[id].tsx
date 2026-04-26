@@ -2,6 +2,8 @@ import { useEffect, useRef, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
+  Animated,
+  Easing,
   FlatList,
   Keyboard,
   KeyboardAvoidingView,
@@ -37,6 +39,45 @@ function MessageBubble({ msg }: { msg: ChatMessage }) {
   );
 }
 
+function ThinkingDots() {
+  const dot0 = useRef(new Animated.Value(0)).current;
+  const dot1 = useRef(new Animated.Value(0)).current;
+  const dot2 = useRef(new Animated.Value(0)).current;
+
+  useEffect(() => {
+    const pulse = (val: Animated.Value, startDelay: number) =>
+      Animated.loop(
+        Animated.sequence([
+          Animated.delay(startDelay),
+          Animated.timing(val, { toValue: 1, duration: 300, easing: Easing.inOut(Easing.ease), useNativeDriver: true }),
+          Animated.timing(val, { toValue: 0, duration: 300, easing: Easing.inOut(Easing.ease), useNativeDriver: true }),
+          Animated.delay(400 - startDelay),
+        ])
+      );
+
+    const anims = [pulse(dot0, 0), pulse(dot1, 133), pulse(dot2, 266)];
+    anims.forEach((a) => a.start());
+    return () => anims.forEach((a) => a.stop());
+  }, []);
+
+  const dotStyle = (val: Animated.Value) => ({
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+    backgroundColor: "#a1a1aa",
+    opacity: val.interpolate({ inputRange: [0, 1], outputRange: [0.25, 1] }),
+    transform: [{ scale: val.interpolate({ inputRange: [0, 1], outputRange: [0.75, 1.15] }) }],
+  });
+
+  return (
+    <View style={{ flexDirection: "row", gap: 5, alignItems: "center", paddingVertical: 4 }}>
+      <Animated.View style={dotStyle(dot0)} />
+      <Animated.View style={dotStyle(dot1)} />
+      <Animated.View style={dotStyle(dot2)} />
+    </View>
+  );
+}
+
 function StreamingBubble({ text }: { text: string }) {
   return (
     <View className="px-4 py-1 items-start">
@@ -44,11 +85,7 @@ function StreamingBubble({ text }: { text: string }) {
         {text ? (
           <Text className="text-white text-base leading-relaxed">{text}</Text>
         ) : (
-          <View className="flex-row gap-1 items-center py-1">
-            <View className="w-2 h-2 rounded-full bg-zinc-500" />
-            <View className="w-2 h-2 rounded-full bg-zinc-500 opacity-70" />
-            <View className="w-2 h-2 rounded-full bg-zinc-500 opacity-40" />
-          </View>
+          <ThinkingDots />
         )}
       </View>
     </View>
@@ -277,6 +314,7 @@ export default function ChatScreen() {
           keyExtractor={(m) => m.id}
           keyboardDismissMode="on-drag"
           keyboardShouldPersistTaps="handled"
+          style={{ flex: 1 }}
           contentContainerStyle={{ paddingVertical: 12, gap: 4 }}
           onContentSizeChange={() => flatListRef.current?.scrollToEnd({ animated: false })}
           ListEmptyComponent={

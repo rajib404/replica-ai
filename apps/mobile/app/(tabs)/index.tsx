@@ -1,7 +1,9 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
+  Animated,
+  Easing,
   FlatList,
   Keyboard,
   KeyboardAvoidingView,
@@ -13,6 +15,7 @@ import {
 } from "react-native";
 import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
+import { useFocusEffect } from "expo-router";
 import * as DocumentPicker from "expo-document-picker";
 import * as ImagePicker from "expo-image-picker";
 import { Audio } from "expo-av";
@@ -20,6 +23,47 @@ import { useAuth } from "../../src/context/AuthContext";
 import { useChat, type ChatMessage } from "../../src/hooks/useChat";
 import { apiClient } from "../../src/api/client";
 import { ENDPOINTS } from "../../src/api/endpoints";
+
+// ─── Animated typing dots ─────────────────────────────────────────────────────
+
+function ThinkingDots() {
+  const dot0 = useRef(new Animated.Value(0)).current;
+  const dot1 = useRef(new Animated.Value(0)).current;
+  const dot2 = useRef(new Animated.Value(0)).current;
+
+  useEffect(() => {
+    const pulse = (val: Animated.Value, startDelay: number) =>
+      Animated.loop(
+        Animated.sequence([
+          Animated.delay(startDelay),
+          Animated.timing(val, { toValue: 1, duration: 300, easing: Easing.inOut(Easing.ease), useNativeDriver: true }),
+          Animated.timing(val, { toValue: 0, duration: 300, easing: Easing.inOut(Easing.ease), useNativeDriver: true }),
+          Animated.delay(400 - startDelay),
+        ])
+      );
+
+    const anims = [pulse(dot0, 0), pulse(dot1, 133), pulse(dot2, 266)];
+    anims.forEach((a) => a.start());
+    return () => anims.forEach((a) => a.stop());
+  }, []);
+
+  const dotStyle = (val: Animated.Value) => ({
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+    backgroundColor: "#a1a1aa",
+    opacity: val.interpolate({ inputRange: [0, 1], outputRange: [0.25, 1] }),
+    transform: [{ scale: val.interpolate({ inputRange: [0, 1], outputRange: [0.75, 1.15] }) }],
+  });
+
+  return (
+    <View style={{ flexDirection: "row", gap: 5, alignItems: "center", paddingVertical: 4 }}>
+      <Animated.View style={dotStyle(dot0)} />
+      <Animated.View style={dotStyle(dot1)} />
+      <Animated.View style={dotStyle(dot2)} />
+    </View>
+  );
+}
 
 // ─── Bubble components ────────────────────────────────────────────────────────
 
@@ -45,11 +89,7 @@ function StreamingBubble({ text }: { text: string }) {
         {text ? (
           <Text className="text-white text-base leading-relaxed">{text}</Text>
         ) : (
-          <View className="flex-row gap-1 items-center py-1">
-            <View className="w-2 h-2 rounded-full bg-zinc-500" />
-            <View className="w-2 h-2 rounded-full bg-zinc-500 opacity-70" />
-            <View className="w-2 h-2 rounded-full bg-zinc-500 opacity-40" />
-          </View>
+          <ThinkingDots />
         )}
       </View>
     </View>
@@ -82,58 +122,65 @@ export default function ChatTab() {
     loadHistory,
   } = useChat(ownerId ?? "", accessToken ?? "", latestThreadId);
 
-  // Load the most recent thread and its messages on mount
-  useEffect(() => {
+  // Fetch (or re-fetch) the latest thread from the server
+  const fetchLatestThread = useCallback(async (merge = false) => {
     if (!ownerId || !accessToken) return;
+    try {
+      const { data: threadsData } = await apiClient.get(ENDPOINTS.CHAT_THREADS);
+      const threads: Array<{ id: string; created_at: string }> = threadsData.threads ?? [];
+      if (threads.length === 0) return;
 
-    let cancelled = false;
+      const latest = threads[0];
 
-    async function loadLatestThread() {
-      try {
-        const { data: threadsData } = await apiClient.get(ENDPOINTS.CHAT_THREADS);
-        const threads: Array<{ id: string; created_at: string }> = threadsData.threads ?? [];
+      const { data: msgsData } = await apiClient.get(
+        ENDPOINTS.CHAT_THREAD_MESSAGES(latest.id)
+      );
+      const raw: Array<{
+        id: string;
+        role: string;
+        content_text: string | null;
+        created_at: string;
+        sources?: ChatMessage["sources"];
+      }> = msgsData.messages ?? [];
 
-        if (threads.length === 0 || cancelled) {
-          setHistoryLoading(false);
-          return;
-        }
+      const history = raw
+        .filter((m) => m.content_text)
+        .map((m) => ({
+          id: m.id,
+          role: m.role as "user" | "assistant",
+          text: m.content_text!,
+          sources: m.sources,
+        }));
 
-        // Threads are expected newest-first; take the first one
-        const latest = threads[0];
-        setLatestThreadId(latest.id);
-
-        const { data: msgsData } = await apiClient.get(
-          ENDPOINTS.CHAT_THREAD_MESSAGES(latest.id)
-        );
-        const raw: Array<{ id: string; role: string; content: string; created_at: string; sources?: ChatMessage["sources"] }> =
-          msgsData.messages ?? [];
-
-        if (!cancelled) {
-          loadHistory(
-            raw.map((m) => ({
-              id: m.id,
-              role: m.role as "user" | "assistant",
-              text: m.content,
-              sources: m.sources,
-            }))
-          );
-        }
-      } catch {
-        // No threads or network error — start fresh
-      } finally {
-        if (!cancelled) setHistoryLoading(false);
-      }
+      setLatestThreadId(latest.id);
+      loadHistory(history, merge);
+    } catch {
+      // Network error or no threads — silently ignore
     }
+  }, [ownerId, accessToken, loadHistory]);
 
-    loadLatestThread();
+  // Initial load — fetch history then connect
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      await fetchLatestThread(false);
+      if (!cancelled) setHistoryLoading(false);
+    })();
     return () => { cancelled = true; };
-  }, [ownerId, accessToken]);
+  }, [fetchLatestThread]);
 
   // Connect once history is loaded
   useEffect(() => {
     if (!historyLoading && ownerId && accessToken) connect();
     return () => disconnect();
   }, [historyLoading, ownerId, accessToken]);
+
+  // Refresh history when tab is focused (picks up messages from desktop/other devices)
+  useFocusEffect(
+    useCallback(() => {
+      if (!historyLoading) fetchLatestThread(true);
+    }, [historyLoading, fetchLatestThread])
+  );
 
   useEffect(() => {
     setTimeout(() => flatListRef.current?.scrollToEnd({ animated: true }), 50);
@@ -333,7 +380,6 @@ export default function ChatTab() {
       <SafeAreaView style={{ flex: 1 }} edges={["top", "left", "right"]}>
         {/* Header */}
         <View className="flex-row items-center px-4 py-3 border-b border-zinc-900 gap-3">
-          {/* Logo mark */}
           <View className="w-8 h-8 rounded-lg bg-brand items-center justify-center">
             <Ionicons name="sparkles" size={16} color="#fff" />
           </View>
@@ -369,10 +415,11 @@ export default function ChatTab() {
           keyExtractor={(m) => m.id}
           keyboardDismissMode="on-drag"
           keyboardShouldPersistTaps="handled"
+          style={{ flex: 1 }}
           contentContainerStyle={{ paddingVertical: 12, gap: 4 }}
           onContentSizeChange={() => flatListRef.current?.scrollToEnd({ animated: false })}
           ListEmptyComponent={
-            !isStreaming ? (
+            !isResponding ? (
               <View className="items-center justify-center py-20 gap-3">
                 <View className="w-16 h-16 rounded-2xl bg-brand/10 items-center justify-center">
                   <Ionicons name="sparkles" size={28} color="#6366f1" />
