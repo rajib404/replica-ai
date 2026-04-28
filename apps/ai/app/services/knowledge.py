@@ -90,7 +90,12 @@ class KnowledgeIngestor:
     def _transcribe_audio(self, file_path: str) -> tuple[str, str]:
         from faster_whisper import WhisperModel
 
-        model = WhisperModel("base", device="cpu", compute_type="int8")
+        model = WhisperModel(
+            "base",
+            device="cpu",
+            compute_type="int8",
+            download_root="/app/model_cache",
+        )
         segments, info = model.transcribe(file_path)
         text = " ".join(seg.text.strip() for seg in segments)
         language = info.language or "en"

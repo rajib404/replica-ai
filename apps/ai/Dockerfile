@@ -30,13 +30,18 @@ COPY --from=deps /usr/local/lib/python3.11/site-packages /usr/local/lib/python3.
 COPY --from=deps /usr/local/bin /usr/local/bin
 
 RUN groupadd --system app && useradd --system --gid app --no-create-home app \
-    && mkdir -p /app/storage \
+    && mkdir -p /app/storage /app/model_cache \
     && chown -R app:app /app
 
 COPY --chown=app:app apps/ai/pyproject.toml ./
 COPY --chown=app:app apps/ai/app ./app
 
+# Pre-download Whisper base model so it's available offline at runtime
 USER app
+RUN python -c "\
+from faster_whisper import WhisperModel; \
+WhisperModel('base', device='cpu', compute_type='int8', download_root='/app/model_cache')" \
+    || true
 EXPOSE 8100
 
 ENV GUNICORN_WORKERS=2 \

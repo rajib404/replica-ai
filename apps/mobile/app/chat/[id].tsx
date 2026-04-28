@@ -145,7 +145,8 @@ export default function ChatScreen() {
           Alert.alert("Nothing transcribed", "No speech was detected.");
         }
       } catch (e: any) {
-        Alert.alert("Transcription failed", e?.message ?? "Unknown error");
+        const detail = e?.response?.data?.detail ?? e?.message ?? "Unknown error";
+        Alert.alert("Transcription failed", detail);
         pendingAudioUri.current = null;
       } finally {
         setTranscribing(false);

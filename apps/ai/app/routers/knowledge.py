@@ -206,7 +206,7 @@ async def transcribe_audio(file: UploadFile) -> TranscribeResponse:
         tmp_path = tmp.name
 
     try:
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         text, language = await loop.run_in_executor(None, _ingestor._transcribe_audio, tmp_path)
     finally:
         Path(tmp_path).unlink(missing_ok=True)
