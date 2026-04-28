@@ -106,8 +106,10 @@ export default function ChatTab() {
 
   const [inputText, setInputText] = useState("");
   const [uploading, setUploading] = useState(false);
+  const [transcribing, setTranscribing] = useState(false);
   const [recording, setRecording] = useState<Audio.Recording | null>(null);
   const [isRecording, setIsRecording] = useState(false);
+  const pendingAudioUri = useRef<string | null>(null);
   const [historyLoading, setHistoryLoading] = useState(true);
   const [latestThreadId, setLatestThreadId] = useState<string | undefined>(undefined);
 
@@ -193,13 +195,14 @@ export default function ChatTab() {
 
   const handleSend = async () => {
     if (isRecording && recording) {
-      // Stop recording, transcribe, send text, upload audio
+      // Step 1: stop recording → transcribe → put text in input for review
       setIsRecording(false);
       await recording.stopAndUnloadAsync();
       const uri = recording.getURI();
       setRecording(null);
       if (!uri) return;
-      setUploading(true);
+      pendingAudioUri.current = uri;
+      setTranscribing(true);
       try {
         const form = new FormData();
         form.append("file", { uri, name: "voice.m4a", type: "audio/m4a" } as any);
@@ -210,25 +213,33 @@ export default function ChatTab() {
         );
         const transcribed = data.text?.trim();
         if (transcribed) {
-          setInputText("");
-          sendMessage(transcribed);
+          setInputText(transcribed);
+        } else {
+          Alert.alert("Nothing transcribed", "No speech was detected.");
         }
-        // Upload original audio as asset in background
-        const audioForm = new FormData();
-        audioForm.append("file", { uri, name: "voice.m4a", type: "audio/m4a" } as any);
-        apiClient.post(ENDPOINTS.KNOWLEDGE_INGEST_AUDIO, audioForm, {
-          headers: { "Content-Type": "multipart/form-data" },
-        }).catch(() => {});
       } catch (e: any) {
-        Alert.alert("Voice send failed", e?.message ?? "Unknown error");
+        Alert.alert("Transcription failed", e?.message ?? "Unknown error");
+        pendingAudioUri.current = null;
       } finally {
-        setUploading(false);
+        setTranscribing(false);
       }
       return;
     }
+
+    // Step 2 (or plain text): send to chat + upload pending audio
     if (!inputText.trim()) return;
     sendMessage(inputText);
     setInputText("");
+
+    if (pendingAudioUri.current) {
+      const uri = pendingAudioUri.current;
+      pendingAudioUri.current = null;
+      const audioForm = new FormData();
+      audioForm.append("file", { uri, name: "voice.m4a", type: "audio/m4a" } as any);
+      apiClient.post(ENDPOINTS.KNOWLEDGE_INGEST_AUDIO, audioForm, {
+        headers: { "Content-Type": "multipart/form-data" },
+      }).catch(() => {});
+    }
   };
 
   const handleFilePick = async () => {
@@ -386,7 +397,7 @@ export default function ChatTab() {
 
   const isStreaming = streamingText.length > 0;
   const isResponding = isThinking || isStreaming;
-  const canSend = connectionState === "connected" && !isResponding && !uploading;
+  const canSend = connectionState === "connected" && !isResponding && !uploading && !transcribing;
   const canSendNow = canSend && (!!inputText.trim() || isRecording);
 
   // ─── Render ────────────────────────────────────────────────────────────────
@@ -525,15 +536,20 @@ export default function ChatTab() {
           {/* Text + send row */}
           <View className="flex-row items-end gap-2">
             <View className="flex-1 relative">
-              {isRecording && (
+              {(isRecording || transcribing) && (
                 <View style={{ position: "absolute", right: 12, top: 12, zIndex: 1, flexDirection: "row", alignItems: "center", gap: 4 }}>
-                  <View style={{ width: 6, height: 6, borderRadius: 3, backgroundColor: "#ef4444" }} />
-                  <Text style={{ color: "#ef4444", fontSize: 11 }}>Listening…</Text>
+                  {transcribing
+                    ? <ActivityIndicator size="small" color="#6366f1" />
+                    : <View style={{ width: 6, height: 6, borderRadius: 3, backgroundColor: "#ef4444" }} />
+                  }
+                  <Text style={{ color: transcribing ? "#6366f1" : "#ef4444", fontSize: 11 }}>
+                    {transcribing ? "Transcribing…" : "Listening…"}
+                  </Text>
                 </View>
               )}
               <TextInput
                 className="bg-zinc-900 text-white rounded-2xl px-4 py-3 border border-zinc-800 max-h-28"
-                placeholder={isRecording ? "Speak now…" : "Message…"}
+                placeholder={isRecording ? "Speak now… (tap ↑ to transcribe)" : "Message…"}
                 placeholderTextColor={isRecording ? "#ef4444" : "#71717a"}
                 value={inputText}
                 onChangeText={setInputText}
@@ -549,7 +565,10 @@ export default function ChatTab() {
               disabled={!canSendNow}
               className="bg-brand rounded-full w-11 h-11 items-center justify-center active:opacity-70 disabled:opacity-40"
             >
-              <Ionicons name="arrow-up" size={20} color="#fff" />
+              {transcribing
+                ? <ActivityIndicator size="small" color="#fff" />
+                : <Ionicons name="arrow-up" size={20} color="#fff" />
+              }
             </Pressable>
           </View>
         </View>
