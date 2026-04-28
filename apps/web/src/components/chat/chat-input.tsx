@@ -107,13 +107,15 @@ export function ChatInput({ onSend, onFileAttach, onVoiceClip, onVideoCall, onVi
       const SpeechRecognitionImpl =
         (window as any).SpeechRecognition ?? (window as any).webkitSpeechRecognition;
       if (SpeechRecognitionImpl) {
-        const recognition: SpeechRecognition = new SpeechRecognitionImpl();
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const recognition: any = new SpeechRecognitionImpl();
         recognition.continuous = true;
         recognition.interimResults = true;
         recognition.lang = 'en-US';
 
         let finalTranscript = '';
-        recognition.onresult = (e: SpeechRecognitionEvent) => {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        recognition.onresult = (e: any) => {
           let interim = '';
           for (let i = e.resultIndex; i < e.results.length; i++) {
             const res = e.results[i];
