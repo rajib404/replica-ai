@@ -29,8 +29,17 @@
       "expo-secure-store",
       "expo-font"
     ],
+    "updates": {
+      "enabled": false
+    },
     "experiments": {
       "typedRoutes": true
+    },
+    "extra": {
+      "router": {},
+      "eas": {
+        "projectId": "a4b52ff1-e4d3-485e-99b3-82eae9441231"
+      }
     }
   }
 }
