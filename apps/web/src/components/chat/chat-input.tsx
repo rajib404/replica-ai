@@ -34,7 +34,8 @@ export function ChatInput({ onSend, onFileAttach, onVoiceClip, onVideoCall, onVi
   const cameraInputRef = useRef<HTMLInputElement>(null);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const audioChunksRef = useRef<Blob[]>([]);
-  const recognitionRef = useRef<SpeechRecognition | null>(null);
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const recognitionRef = useRef<any>(null);
   const isTouchDevice = useIsTouchDevice();
   const haptic = useHaptic();
 
