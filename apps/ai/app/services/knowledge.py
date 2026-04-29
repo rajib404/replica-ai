@@ -1,8 +1,10 @@
 import asyncio
 import logging
 import tempfile
+import threading
 import uuid
 from pathlib import Path
+from typing import Any
 
 import redis.asyncio as aioredis
 
@@ -12,6 +14,28 @@ from app.core.task_tracker import TaskStatus, update_task
 from app.services.llm_engine import OllamaClient
 
 logger = logging.getLogger(__name__)
+
+# Whisper model loaded once and reused across all requests.
+_whisper_model: Any = None
+_whisper_lock = threading.Lock()
+
+
+def _get_whisper_model() -> Any:
+    global _whisper_model
+    if _whisper_model is not None:
+        return _whisper_model
+    with _whisper_lock:
+        if _whisper_model is None:
+            from faster_whisper import WhisperModel
+            logger.info("Loading faster-whisper base model…")
+            _whisper_model = WhisperModel(
+                "base",
+                device="cpu",
+                compute_type="int8",
+                download_root="/app/model_cache",
+            )
+            logger.info("faster-whisper model ready")
+    return _whisper_model
 
 CHUNK_SIZE = 2000
 CHUNK_OVERLAP = 200
@@ -88,14 +112,7 @@ class KnowledgeIngestor:
         return chunks
 
     def _transcribe_audio(self, file_path: str) -> tuple[str, str]:
-        from faster_whisper import WhisperModel
-
-        model = WhisperModel(
-            "base",
-            device="cpu",
-            compute_type="int8",
-            download_root="/app/model_cache",
-        )
+        model = _get_whisper_model()
         segments, info = model.transcribe(file_path)
         text = " ".join(seg.text.strip() for seg in segments)
         language = info.language or "en"

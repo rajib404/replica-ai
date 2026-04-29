@@ -45,6 +45,7 @@ volumes:
   piper_data:
   api_storage:
   ai_storage:
+  ai_model_cache:
   letsencrypt:
   certbot_www:
   backups:
@@ -201,6 +202,7 @@ services:
       GUNICORN_TIMEOUT: ${GUNICORN_TIMEOUT:-300}
     volumes:
       - ai_storage:/app/storage
+      - ai_model_cache:/app/model_cache
     networks:
       - replica_internal
       - replica_egress
