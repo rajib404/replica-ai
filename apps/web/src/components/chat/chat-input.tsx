@@ -34,8 +34,7 @@ export function ChatInput({ onSend, onFileAttach, onVoiceClip, onVideoCall, onVi
   const cameraInputRef = useRef<HTMLInputElement>(null);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const audioChunksRef = useRef<Blob[]>([]);
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const recognitionRef = useRef<any>(null);
+  const recognitionRef = useRef<unknown>(null);
   const isTouchDevice = useIsTouchDevice();
   const haptic = useHaptic();
 
@@ -63,7 +62,7 @@ export function ChatInput({ onSend, onFileAttach, onVoiceClip, onVideoCall, onVi
   }, []);
 
   const stopRecording = useCallback((emitClip = true) => {
-    recognitionRef.current?.stop();
+    (recognitionRef.current as { stop?: () => void } | null)?.stop?.();
     recognitionRef.current = null;
 
     const recorder = mediaRecorderRef.current;
@@ -104,17 +103,16 @@ export function ChatInput({ onSend, onFileAttach, onVoiceClip, onVideoCall, onVi
       mediaRecorderRef.current = recorder;
 
       // SpeechRecognition for live transcription
+      /* eslint-disable */
       const SpeechRecognitionImpl =
         (window as any).SpeechRecognition ?? (window as any).webkitSpeechRecognition;
       if (SpeechRecognitionImpl) {
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const recognition: any = new SpeechRecognitionImpl();
         recognition.continuous = true;
         recognition.interimResults = true;
         recognition.lang = 'en-US';
 
         let finalTranscript = '';
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
         recognition.onresult = (e: any) => {
           let interim = '';
           for (let i = e.resultIndex; i < e.results.length; i++) {
@@ -131,6 +129,7 @@ export function ChatInput({ onSend, onFileAttach, onVoiceClip, onVideoCall, onVi
         recognition.start();
         recognitionRef.current = recognition;
       }
+      /* eslint-enable */
 
       setIsRecording(true);
       haptic.light();
