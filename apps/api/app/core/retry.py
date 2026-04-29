@@ -91,11 +91,16 @@ def ollama_retry(func: F) -> F:
                 details={"attempts": settings.retry_ollama_attempts},
             ) from e
         except httpx.HTTPStatusError as e:
-            # 5xx from Ollama — don't keep pounding it, surface cleanly
+            # 5xx from AI service — surface the body so callers can diagnose
             if 500 <= e.response.status_code < 600:
+                try:
+                    body = e.response.json()
+                    ai_detail = body.get("detail") or body.get("message") or str(body)
+                except Exception:
+                    ai_detail = e.response.text or "no response body"
                 raise ModelUnavailableError(
-                    "The AI model returned an internal error. Please try again.",
-                    details={"status": e.response.status_code},
+                    f"AI service error ({e.response.status_code}): {ai_detail}",
+                    details={"status": e.response.status_code, "ai_detail": ai_detail},
                 ) from e
             raise
 
