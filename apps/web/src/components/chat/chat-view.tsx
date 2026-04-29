@@ -562,6 +562,29 @@ export function ChatView({ ownerId }: ChatViewProps) {
   async function handleVoiceClip(blob: Blob) {
     const ext = blob.type.includes('webm') ? '.webm' : '.m4a';
     const file = new File([blob], `voice${ext}`, { type: blob.type });
+
+    // Transcribe via API so it works on all browsers (not just SpeechRecognition-capable ones)
+    const formData = new FormData();
+    formData.append('file', file);
+    const token = api.getToken();
+    try {
+      const resp = await fetch(
+        `${process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:8000'}/api/knowledge/transcribe`,
+        {
+          method: 'POST',
+          headers: token ? { Authorization: `Bearer ${token}` } : {},
+          body: formData,
+        },
+      );
+      if (resp.ok) {
+        const body = await resp.json();
+        const transcribed = (body.text as string | undefined)?.trim();
+        if (transcribed) setSharedDraft(transcribed);
+      }
+    } catch {
+      // Transcription failed — user can type manually
+    }
+
     await handleFileAttach(file);
   }
 

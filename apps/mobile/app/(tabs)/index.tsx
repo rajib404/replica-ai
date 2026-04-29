@@ -209,7 +209,7 @@ export default function ChatTab() {
         const { data } = await apiClient.post<{ text: string }>(
           ENDPOINTS.KNOWLEDGE_TRANSCRIBE,
           form,
-          { headers: { "Content-Type": "multipart/form-data" } }
+          { headers: { "Content-Type": "multipart/form-data" }, timeout: 120_000 }
         );
         const transcribed = data.text?.trim();
         if (transcribed) {
@@ -218,7 +218,11 @@ export default function ChatTab() {
           Alert.alert("Nothing transcribed", "No speech was detected.");
         }
       } catch (e: any) {
-        const detail = e?.response?.data?.detail ?? e?.message ?? "Unknown error";
+        const detail =
+          e?.response?.data?.error?.message ??
+          e?.response?.data?.detail ??
+          e?.message ??
+          "Unknown error";
         Alert.alert("Transcription failed", detail);
         pendingAudioUri.current = null;
       } finally {
