@@ -48,6 +48,12 @@ COPY --chown=app:app apps/api/app ./app
 USER app
 EXPOSE 8000
 
+# app has no home dir (--no-create-home); without HOME set explicitly it
+# defaults to /home/app, which doesn't exist and isn't writable — gunicorn's
+# control-socket feature then fails on every boot with "Control server
+# error: Permission denied: '/home/app'" (non-fatal, but pure log spam).
+ENV HOME=/app
+
 ENV GUNICORN_WORKERS=4 \
     GUNICORN_TIMEOUT=120 \
     GUNICORN_GRACEFUL_TIMEOUT=30

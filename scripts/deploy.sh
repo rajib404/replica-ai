@@ -163,6 +163,20 @@ else
     log "Detected ${TOTAL_RAM_MB}MB RAM → OLLAMA_DEFAULT_MODEL=$OLLAMA_MODEL"
     sed -i "s|^OLLAMA_DEFAULT_MODEL=.*|OLLAMA_DEFAULT_MODEL=$OLLAMA_MODEL|" "$ENV_FILE"
 
+    # ── Trim gunicorn worker counts on small hosts ──
+    # api imports several heavy ML libraries at startup (resemblyzer →
+    # torch, face_recognition → dlib, faster-whisper → ctranslate2);
+    # each extra worker duplicates that whole import footprint, and the
+    # small-host memory caps in docker-compose.prod.small.yml assume a
+    # single worker. Same threshold as the compose-file selection above.
+    if [[ $TOTAL_RAM_MB -lt 6000 ]]; then
+        log "Small host detected — setting GUNICORN_WORKERS=1, AI_GUNICORN_WORKERS=1"
+        sed -i \
+            -e "s|^GUNICORN_WORKERS=.*|GUNICORN_WORKERS=1|" \
+            -e "s|^AI_GUNICORN_WORKERS=.*|AI_GUNICORN_WORKERS=1|" \
+            "$ENV_FILE"
+    fi
+
     cat <<EOF
 
   ╔═══════════════════════════════════════════════════════════╗

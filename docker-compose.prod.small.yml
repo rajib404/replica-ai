@@ -12,12 +12,31 @@
 # docker-compose.prod.yml. Usage: pass both files together, e.g.
 #   docker compose -f docker-compose.prod.yml -f docker-compose.prod.small.yml ...
 #
-# These caps intentionally sum to ~3.4GB, leaving headroom for the
-# host OS and Docker daemon out of 4GB total. Pair with a swap file
-# (see deployment docs) as a safety net for transient spikes, and
-# plan to drop this override (or resize the box) before onboarding
-# meaningful paid traffic — this is a "launch and test" sizing, not
-# a "serve many concurrent users" one.
+# These caps sum to ~3.35GB, leaving real headroom for the host OS,
+# Docker daemon, and page cache out of ~3.8GB usable RAM on a "4GB"
+# droplet. An earlier version of this file summed to ~4.2GB — over
+# the physical total before the OS even started — which under real
+# load produced a full-blown OOM crash loop: the kernel/cgroup OOM
+# killer repeatedly SIGKILLed api's gunicorn workers milliseconds
+# after each one booted, so the api container never had a live
+# worker to answer a request and every proxied /api/* call hung
+# until nginx's own timeout. Lesson: always check the actual sum
+# against `free -h` on the target box, not just against the labeled
+# RAM size — verify with `docker stats` under real traffic too.
+#
+# api also needs GUNICORN_WORKERS trimmed on this tier (set it to 1
+# in .env.production) — it imports several heavy ML libraries
+# (resemblyzer → torch, face_recognition → dlib, faster-whisper →
+# ctranslate2) at startup, so each additional worker process
+# duplicates that entire import footprint. See scripts/deploy.sh,
+# which now sets this automatically for fresh installs on small
+# hosts — existing installs need the .env.production value updated
+# by hand.
+#
+# Pair with a swap file (see deployment docs) as a safety net for
+# transient spikes, and plan to drop this override (or resize the
+# box) before onboarding meaningful paid traffic — this is a
+# "launch and test" sizing, not a "serve many concurrent users" one.
 # ─────────────────────────────────────────────────────────────
 
 services:
@@ -25,68 +44,68 @@ services:
     deploy:
       resources:
         limits:
-          memory: 128M
+          memory: 64M
           cpus: "0.25"
 
   web:
     deploy:
       resources:
         limits:
-          memory: 384M
+          memory: 288M
           cpus: "0.5"
 
   api:
     deploy:
       resources:
         limits:
-          memory: 512M
+          memory: 640M
           cpus: "1.0"
 
   ai:
     deploy:
       resources:
         limits:
-          memory: 768M
+          memory: 576M
           cpus: "1.0"
 
   pgbouncer:
     deploy:
       resources:
         limits:
-          memory: 64M
+          memory: 48M
           cpus: "0.25"
 
   postgres:
     deploy:
       resources:
         limits:
-          memory: 384M
+          memory: 288M
           cpus: "0.5"
 
   redis:
     deploy:
       resources:
         limits:
-          memory: 128M
+          memory: 96M
           cpus: "0.25"
 
   qdrant:
     deploy:
       resources:
         limits:
-          memory: 384M
+          memory: 288M
           cpus: "0.5"
 
   ollama:
     deploy:
       resources:
         limits:
-          memory: 1200M
+          memory: 900M
           cpus: "1.5"
 
   piper:
     deploy:
       resources:
         limits:
-          memory: 256M
+          memory: 160M
           cpus: "0.25"
