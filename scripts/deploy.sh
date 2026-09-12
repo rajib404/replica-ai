@@ -59,6 +59,7 @@ SMALL_COMPOSE_FILE="$REPO_ROOT/docker-compose.prod.small.yml"
 ENV_FILE="$REPO_ROOT/.env.production"
 ENV_TEMPLATE="$REPO_ROOT/.env.production.example"
 NGINX_CONF="$REPO_ROOT/nginx/conf.d/replica-ai.conf"
+HTTPS_TEMPLATE="$REPO_ROOT/nginx/https.conf.template"
 
 log()  { echo "[deploy] $*"; }
 warn() { echo "[deploy] WARN: $*" >&2; }
@@ -232,12 +233,40 @@ dc up -d ai api web
 log "Starting nginx with HTTP listener…"
 dc up -d nginx
 
+log "Waiting for nginx to accept connections on port 80…"
+NGINX_READY=0
+for i in {1..30}; do
+    if curl -fsS "http://localhost/healthz" >/dev/null 2>&1; then
+        NGINX_READY=1
+        break
+    fi
+    sleep 1
+done
+[[ $NGINX_READY -eq 1 ]] || fail "nginx never answered on port 80 — check: docker compose -f $COMPOSE_FILE logs nginx"
+
 # ─── 7. Obtain TLS certificate ───────────────────────────
 CERT_PATH="/etc/letsencrypt/live/$DOMAIN/fullchain.pem"
+
+# Renders nginx/https.conf.template (kept out of conf.d/ so nginx never
+# loads it before a cert exists — see the file's header comment) with
+# {{DOMAIN}} substituted. Written to the HOST path, not via `dc exec` —
+# nginx/conf.d is bind-mounted `:ro` into the container, so the container
+# can't write there; the host copy is what the mount actually serves, and
+# it persists across restarts/updates same as replica-ai.conf already does.
+# Safe to call only once CERT_PATH is confirmed present.
+enable_https_vhost() {
+    log "Enabling HTTPS vhost for $DOMAIN…"
+    sed "s|{{DOMAIN}}|$DOMAIN|g" "$HTTPS_TEMPLATE" \
+        > "$REPO_ROOT/nginx/conf.d/replica-ai-ssl.conf"
+    dc exec -T nginx nginx -t \
+        || fail "generated HTTPS nginx config is invalid — check nginx/https.conf.template"
+    dc exec -T nginx nginx -s reload
+}
 
 if dc exec -T certbot \
         test -f "$CERT_PATH" 2>/dev/null; then
     log "TLS certificate already exists for $DOMAIN — skipping certbot"
+    enable_https_vhost
 else
     log "Requesting Let's Encrypt certificate…"
     dc run --rm \
@@ -249,8 +278,7 @@ else
             -d "$DOMAIN" \
         || fail "certbot failed — DNS for $DOMAIN must point to this server"
 
-    log "Reloading nginx with new certificate…"
-    dc exec nginx nginx -s reload
+    enable_https_vhost
 fi
 
 # ─── 8. Start certbot renewal loop ───────────────────────
