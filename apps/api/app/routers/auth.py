@@ -188,10 +188,15 @@ async def auth_google_callback(
     login_page = f"{settings.web_app_url}/login"
 
     if error or not code or not state:
+        logger.warning(
+            "Google sign-in callback missing required params: error=%r code_present=%s state_present=%s",
+            error, bool(code), bool(state),
+        )
         return RedirectResponse(f"{login_page}?error=google_sign_in_failed")
 
     state_key = f"oauth_state:google:{state}"
     if not await redis.get(state_key):
+        logger.warning("Google sign-in state token not found/expired in redis: %s", state_key)
         return RedirectResponse(f"{login_page}?error=google_sign_in_expired")
     await redis.delete(state_key)
 
