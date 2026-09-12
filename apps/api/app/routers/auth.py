@@ -1,3 +1,4 @@
+import logging
 import secrets
 from urllib.parse import quote
 
@@ -49,6 +50,7 @@ from app.services.auth import (
 )
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
+logger = logging.getLogger(__name__)
 
 
 @router.post("/setup", response_model=SetupResponse, status_code=status.HTTP_201_CREATED)
@@ -197,6 +199,7 @@ async def auth_google_callback(
         userinfo = await exchange_google_code(code)
         owner = await login_or_create_owner_via_google(userinfo, db)
     except Exception:
+        logger.exception("Google sign-in callback failed")
         return RedirectResponse(f"{login_page}?error=google_sign_in_failed")
 
     access_token = create_access_token(subject=owner.id, role="owner")
