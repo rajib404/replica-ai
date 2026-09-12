@@ -1,0 +1,92 @@
+# ─────────────────────────────────────────────────────────────
+# Resource-cap override for small VPS hosts (~4GB RAM, 2 vCPU).
+#
+# docker-compose.prod.yml's default limits assume the project's
+# recommended minimum (4 vCPU / 8GB) and sum to ~21GB across all
+# services — fine as upper bounds on a bigger box, but on a 4GB
+# box every container would happily try to grow toward its cap and
+# the kernel OOM-killer would start picking victims at random.
+#
+# This file only overrides `deploy.resources.limits` — everything
+# else (images, env, volumes, healthchecks) is inherited from
+# docker-compose.prod.yml. Usage: pass both files together, e.g.
+#   docker compose -f docker-compose.prod.yml -f docker-compose.prod.small.yml ...
+#
+# These caps intentionally sum to ~3.4GB, leaving headroom for the
+# host OS and Docker daemon out of 4GB total. Pair with a swap file
+# (see deployment docs) as a safety net for transient spikes, and
+# plan to drop this override (or resize the box) before onboarding
+# meaningful paid traffic — this is a "launch and test" sizing, not
+# a "serve many concurrent users" one.
+# ─────────────────────────────────────────────────────────────
+
+services:
+  nginx:
+    deploy:
+      resources:
+        limits:
+          memory: 128M
+          cpus: "0.25"
+
+  web:
+    deploy:
+      resources:
+        limits:
+          memory: 384M
+          cpus: "0.5"
+
+  api:
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+          cpus: "1.0"
+
+  ai:
+    deploy:
+      resources:
+        limits:
+          memory: 768M
+          cpus: "1.0"
+
+  pgbouncer:
+    deploy:
+      resources:
+        limits:
+          memory: 64M
+          cpus: "0.25"
+
+  postgres:
+    deploy:
+      resources:
+        limits:
+          memory: 384M
+          cpus: "0.5"
+
+  redis:
+    deploy:
+      resources:
+        limits:
+          memory: 128M
+          cpus: "0.25"
+
+  qdrant:
+    deploy:
+      resources:
+        limits:
+          memory: 384M
+          cpus: "0.5"
+
+  ollama:
+    deploy:
+      resources:
+        limits:
+          memory: 1200M
+          cpus: "1.5"
+
+  piper:
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+          cpus: "0.25"

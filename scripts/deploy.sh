@@ -55,6 +55,7 @@ fi
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 COMPOSE_FILE="$REPO_ROOT/docker-compose.prod.yml"
+SMALL_COMPOSE_FILE="$REPO_ROOT/docker-compose.prod.small.yml"
 ENV_FILE="$REPO_ROOT/.env.production"
 ENV_TEMPLATE="$REPO_ROOT/.env.production.example"
 NGINX_CONF="$REPO_ROOT/nginx/conf.d/replica-ai.conf"
@@ -62,6 +63,19 @@ NGINX_CONF="$REPO_ROOT/nginx/conf.d/replica-ai.conf"
 log()  { echo "[deploy] $*"; }
 warn() { echo "[deploy] WARN: $*" >&2; }
 fail() { echo "[deploy] ERROR: $*" >&2; exit 1; }
+
+# Below this, the default per-service memory caps in docker-compose.prod.yml
+# (sized for the recommended 8GB+ host) would sum past the box's real RAM —
+# layer on tightened caps instead of letting every container reach for its
+# default ceiling at once. See docker-compose.prod.small.yml for details.
+TOTAL_RAM_MB=$(awk '/MemTotal/ {print int($2/1024)}' /proc/meminfo)
+if [[ $TOTAL_RAM_MB -lt 6000 ]]; then
+    log "Detected ${TOTAL_RAM_MB}MB RAM — applying docker-compose.prod.small.yml resource caps"
+    COMPOSE_ARGS=(-f "$COMPOSE_FILE" -f "$SMALL_COMPOSE_FILE")
+else
+    COMPOSE_ARGS=(-f "$COMPOSE_FILE")
+fi
+dc() { docker compose "${COMPOSE_ARGS[@]}" --env-file "$ENV_FILE" "$@"; }
 
 confirm() {
     [[ $NON_INTERACTIVE -eq 1 ]] && return 0
@@ -139,10 +153,11 @@ else
     log "Wrote $ENV_FILE (mode 600, root-owned)"
 
     # ── Pick an Ollama default model based on host RAM ──
-    TOTAL_RAM_MB=$(awk '/MemTotal/ {print int($2/1024)}' /proc/meminfo)
+    # (TOTAL_RAM_MB was already computed above, for the compose-caps decision)
     if   [[ $TOTAL_RAM_MB -ge 16000 ]]; then OLLAMA_MODEL="mistral:7b-instruct"
     elif [[ $TOTAL_RAM_MB -ge 12000 ]]; then OLLAMA_MODEL="qwen2.5:3b"
-    else                                     OLLAMA_MODEL="gemma2:2b"
+    elif [[ $TOTAL_RAM_MB -ge 6000  ]]; then OLLAMA_MODEL="gemma2:2b"
+    else                                     OLLAMA_MODEL="qwen2.5:1.5b"
     fi
     log "Detected ${TOTAL_RAM_MB}MB RAM → OLLAMA_DEFAULT_MODEL=$OLLAMA_MODEL"
     sed -i "s|^OLLAMA_DEFAULT_MODEL=.*|OLLAMA_DEFAULT_MODEL=$OLLAMA_MODEL|" "$ENV_FILE"
@@ -181,15 +196,15 @@ rm -f "${NGINX_CONF}.bak"
 
 # ─── 4. Initial bring-up (HTTP only, for ACME challenge) ─
 log "Building images (this may take several minutes)…"
-docker compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE" build
+dc build
 
 log "Starting infrastructure services…"
-docker compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE" up -d \
+dc up -d \
     postgres redis qdrant ollama piper pgbouncer
 
 log "Waiting for postgres to become healthy…"
 for i in {1..30}; do
-    if docker compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE" exec -T postgres \
+    if dc exec -T postgres \
         pg_isready -U "$POSTGRES_USER" >/dev/null 2>&1; then
         break
     fi
@@ -211,21 +226,21 @@ fi
 
 # ─── 6. Bring up app services + nginx (HTTP only) ────────
 log "Starting application services and nginx (HTTP)…"
-docker compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE" up -d ai api web
+dc up -d ai api web
 
 # Temporarily start nginx with HTTP-only listener so certbot can answer challenge
 log "Starting nginx with HTTP listener…"
-docker compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE" up -d nginx
+dc up -d nginx
 
 # ─── 7. Obtain TLS certificate ───────────────────────────
 CERT_PATH="/etc/letsencrypt/live/$DOMAIN/fullchain.pem"
 
-if docker compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE" exec -T certbot \
+if dc exec -T certbot \
         test -f "$CERT_PATH" 2>/dev/null; then
     log "TLS certificate already exists for $DOMAIN — skipping certbot"
 else
     log "Requesting Let's Encrypt certificate…"
-    docker compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE" run --rm \
+    dc run --rm \
         --entrypoint "" certbot \
         certbot certonly \
             --webroot --webroot-path=/var/www/certbot \
@@ -235,15 +250,15 @@ else
         || fail "certbot failed — DNS for $DOMAIN must point to this server"
 
     log "Reloading nginx with new certificate…"
-    docker compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE" exec nginx nginx -s reload
+    dc exec nginx nginx -s reload
 fi
 
 # ─── 8. Start certbot renewal loop ───────────────────────
-docker compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE" up -d certbot
+dc up -d certbot
 
 # ─── 8b. Pull the default Ollama model ───────────────────
 log "Pulling Ollama model: $OLLAMA_DEFAULT_MODEL (this can take several minutes)…"
-docker compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE" exec -T ollama \
+dc exec -T ollama \
     ollama pull "$OLLAMA_DEFAULT_MODEL" \
     || warn "Ollama model pull failed — run manually: docker compose exec ollama ollama pull $OLLAMA_DEFAULT_MODEL"
 
@@ -251,11 +266,11 @@ docker compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE" exec -T ollama \
 log "Waiting for services to settle…"
 sleep 10
 
-docker compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE" ps
+dc ps
 
 # Check the API's detailed health endpoint and warn on degraded services
 log "Checking detailed health…"
-HEALTH=$(docker compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE" exec -T api \
+HEALTH=$(dc exec -T api \
     curl -fsS http://localhost:8000/api/health/detailed 2>/dev/null || echo '{}')
 echo "$HEALTH" | grep -q '"status":"ok"' \
     && log "✓ All services healthy" \

@@ -35,6 +35,7 @@ fi
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 COMPOSE_FILE="$REPO_ROOT/docker-compose.prod.yml"
+SMALL_COMPOSE_FILE="$REPO_ROOT/docker-compose.prod.small.yml"
 ENV_FILE="$REPO_ROOT/.env.production"
 
 log()  { echo "[update] $*"; }
@@ -46,8 +47,18 @@ fail() { echo "[update] ERROR: $*" >&2; exit 1; }
 # shellcheck disable=SC1090
 set -a; source "$ENV_FILE"; set +a
 
+# Same small-host resource caps deploy.sh applies on first bring-up — must
+# stay consistent across updates, so this checks the same RAM threshold
+# rather than reading a stored flag (RAM doesn't change between runs).
+TOTAL_RAM_MB=$(awk '/MemTotal/ {print int($2/1024)}' /proc/meminfo)
+if [[ $TOTAL_RAM_MB -lt 6000 ]]; then
+    COMPOSE_ARGS=(-f "$COMPOSE_FILE" -f "$SMALL_COMPOSE_FILE")
+else
+    COMPOSE_ARGS=(-f "$COMPOSE_FILE")
+fi
+
 dc() {
-    docker compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE" "$@"
+    docker compose "${COMPOSE_ARGS[@]}" --env-file "$ENV_FILE" "$@"
 }
 
 # ─── 1. Pull latest code ─────────────────────────────────
