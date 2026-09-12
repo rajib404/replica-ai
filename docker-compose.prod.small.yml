@@ -12,7 +12,7 @@
 # docker-compose.prod.yml. Usage: pass both files together, e.g.
 #   docker compose -f docker-compose.prod.yml -f docker-compose.prod.small.yml ...
 #
-# These caps sum to ~3.35GB, leaving real headroom for the host OS,
+# These caps sum to ~3.4GB, leaving real headroom for the host OS,
 # Docker daemon, and page cache out of ~3.8GB usable RAM on a "4GB"
 # droplet. An earlier version of this file summed to ~4.2GB — over
 # the physical total before the OS even started — which under real
@@ -83,10 +83,25 @@ services:
           cpus: "0.5"
 
   redis:
+    # Base docker-compose.prod.yml hardcodes `--maxmemory 512mb` in redis's
+    # command, which this override's cgroup cap can't see — Redis would
+    # never trigger its own LRU eviction (it thinks it has 512MB of
+    # headroom), so the kernel/cgroup OOM-kills the process outright
+    # instead, silently dropping in-flight data (e.g. short-lived OAuth
+    # state tokens) rather than gracefully evicting. Repeat the full
+    # command here with maxmemory brought down under the cgroup cap —
+    # compose replaces `command` wholesale on merge, no partial patching.
+    command: >
+      redis-server
+      --appendonly yes
+      --appendfsync everysec
+      --maxmemory 96mb
+      --maxmemory-policy allkeys-lru
+      --requirepass ${REDIS_PASSWORD}
     deploy:
       resources:
         limits:
-          memory: 96M
+          memory: 128M
           cpus: "0.25"
 
   qdrant:
