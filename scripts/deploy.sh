@@ -268,15 +268,29 @@ if dc exec -T certbot \
     log "TLS certificate already exists for $DOMAIN — skipping certbot"
     enable_https_vhost
 else
-    log "Requesting Let's Encrypt certificate…"
-    dc run --rm \
+    log "Requesting Let's Encrypt certificate for $DOMAIN and www.$DOMAIN…"
+    if dc run --rm \
         --entrypoint "" certbot \
         certbot certonly \
             --webroot --webroot-path=/var/www/certbot \
             --email "$EMAIL" \
             --agree-tos --no-eff-email \
-            -d "$DOMAIN" \
-        || fail "certbot failed — DNS for $DOMAIN must point to this server"
+            -d "$DOMAIN" -d "www.$DOMAIN"; then
+        :
+    else
+        # A cert request naming multiple hosts fails as a whole if any one
+        # of them doesn't resolve to this server yet — retry bare-domain-only
+        # rather than blocking the entire deploy on a missing www DNS record.
+        warn "certbot failed for $DOMAIN + www.$DOMAIN — retrying with $DOMAIN only (add a DNS record for www.$DOMAIN and rerun to cover it)"
+        dc run --rm \
+            --entrypoint "" certbot \
+            certbot certonly \
+                --webroot --webroot-path=/var/www/certbot \
+                --email "$EMAIL" \
+                --agree-tos --no-eff-email \
+                -d "$DOMAIN" \
+            || fail "certbot failed — DNS for $DOMAIN must point to this server"
+    fi
 
     enable_https_vhost
 fi
