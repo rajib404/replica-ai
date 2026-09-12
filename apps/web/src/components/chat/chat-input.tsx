@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useRef, useEffect, useCallback, type KeyboardEvent, type ChangeEvent } from 'react';
-import { Mic, MicOff, Video, Film, Paperclip, Send, X, FileText, Camera } from 'lucide-react';
+import { Mic, MicOff, Mic2, Square, Film, Paperclip, Send, X, FileText, Camera } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { Badge } from '@/components/ui/badge';
@@ -12,7 +12,7 @@ interface ChatInputProps {
   onSend: (text: string) => void;
   onFileAttach?: (file: File) => void;
   onVoiceClip?: (blob: Blob) => void;
-  onVideoCall?: () => void;
+  onVoiceMessage?: (file: File) => void;
   onVideoRecord?: () => void;
   disabled?: boolean;
   initialText?: string;
@@ -25,16 +25,30 @@ const ALLOWED_FILE_TYPES = [
   '.jpg', '.jpeg', '.png', '.gif', '.webp', '.heic', '.heif',
 ];
 
-export function ChatInput({ onSend, onFileAttach, onVoiceClip, onVideoCall, onVideoRecord, disabled, initialText }: ChatInputProps) {
+// Auto-stop a voice message recording after this much continuous silence.
+const VOICE_MESSAGE_SILENCE_TIMEOUT_MS = 2 * 60 * 1000;
+const VOICE_MESSAGE_SILENCE_THRESHOLD = 0.02;
+
+export function ChatInput({ onSend, onFileAttach, onVoiceClip, onVoiceMessage, onVideoRecord, disabled, initialText }: ChatInputProps) {
   const [text, setText] = useState(initialText ?? '');
   const [attachedFile, setAttachedFile] = useState<File | null>(null);
   const [isRecording, setIsRecording] = useState(false);
+  const [isRecordingMessage, setIsRecordingMessage] = useState(false);
+  const [messageDuration, setMessageDuration] = useState(0);
+  const [messageAudioLevel, setMessageAudioLevel] = useState(0);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const cameraInputRef = useRef<HTMLInputElement>(null);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const audioChunksRef = useRef<Blob[]>([]);
   const recognitionRef = useRef<unknown>(null);
+  const messageStreamRef = useRef<MediaStream | null>(null);
+  const messageRecorderRef = useRef<MediaRecorder | null>(null);
+  const messageChunksRef = useRef<Blob[]>([]);
+  const messageAudioCtxRef = useRef<AudioContext | null>(null);
+  const messageAnimationRef = useRef<number>(0);
+  const messageTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const messageSilenceStartRef = useRef<number | null>(null);
   const isTouchDevice = useIsTouchDevice();
   const haptic = useHaptic();
 
@@ -57,6 +71,7 @@ export function ChatInput({ onSend, onFileAttach, onVoiceClip, onVideoCall, onVi
   useEffect(() => {
     return () => {
       stopRecording(false);
+      stopVoiceMessageRecording();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -137,6 +152,117 @@ export function ChatInput({ onSend, onFileAttach, onVoiceClip, onVideoCall, onVi
       // Microphone denied — silently ignore
     }
   }, [haptic]);
+
+  const stopVoiceMessageRecording = useCallback(() => {
+    if (messageAnimationRef.current) {
+      cancelAnimationFrame(messageAnimationRef.current);
+      messageAnimationRef.current = 0;
+    }
+    if (messageTimerRef.current) {
+      clearInterval(messageTimerRef.current);
+      messageTimerRef.current = null;
+    }
+    messageSilenceStartRef.current = null;
+
+    const recorder = messageRecorderRef.current;
+    if (recorder && recorder.state !== 'inactive') {
+      recorder.stop();
+    } else {
+      setIsRecordingMessage(false);
+      setMessageDuration(0);
+      setMessageAudioLevel(0);
+    }
+  }, []);
+
+  const startVoiceMessageRecording = useCallback(async () => {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      messageStreamRef.current = stream;
+
+      const mimeType = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
+        ? 'audio/webm;codecs=opus'
+        : 'audio/webm';
+      const recorder = new MediaRecorder(stream, { mimeType });
+      messageRecorderRef.current = recorder;
+      messageChunksRef.current = [];
+
+      recorder.ondataavailable = (e) => {
+        if (e.data.size > 0) messageChunksRef.current.push(e.data);
+      };
+
+      recorder.onstop = () => {
+        const blob = new Blob(messageChunksRef.current, { type: recorder.mimeType });
+        messageChunksRef.current = [];
+
+        stream.getTracks().forEach((t) => t.stop());
+        messageStreamRef.current = null;
+        messageRecorderRef.current = null;
+
+        if (messageAudioCtxRef.current) {
+          messageAudioCtxRef.current.close().catch(() => {});
+          messageAudioCtxRef.current = null;
+        }
+
+        setIsRecordingMessage(false);
+        setMessageDuration(0);
+        setMessageAudioLevel(0);
+
+        if (blob.size > 0) {
+          const file = new File([blob], `voice-message-${Date.now()}.webm`, { type: blob.type });
+          onVoiceMessage?.(file);
+        }
+      };
+
+      // Volume monitoring drives the progress animation and detects silence
+      // so the recording can auto-stop after a period of no input.
+      const AudioCtx = window.AudioContext ?? (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
+      const audioCtx = new AudioCtx();
+      messageAudioCtxRef.current = audioCtx;
+      const source = audioCtx.createMediaStreamSource(stream);
+      const analyser = audioCtx.createAnalyser();
+      analyser.fftSize = 512;
+      source.connect(analyser);
+
+      const data = new Uint8Array(analyser.frequencyBinCount);
+      messageSilenceStartRef.current = null;
+      const monitor = () => {
+        analyser.getByteFrequencyData(data);
+        const avg = data.reduce((a, b) => a + b, 0) / data.length / 255;
+        setMessageAudioLevel(avg);
+
+        if (avg < VOICE_MESSAGE_SILENCE_THRESHOLD) {
+          if (messageSilenceStartRef.current === null) {
+            messageSilenceStartRef.current = Date.now();
+          } else if (Date.now() - messageSilenceStartRef.current >= VOICE_MESSAGE_SILENCE_TIMEOUT_MS) {
+            stopVoiceMessageRecording();
+            return;
+          }
+        } else {
+          messageSilenceStartRef.current = null;
+        }
+
+        messageAnimationRef.current = requestAnimationFrame(monitor);
+      };
+      monitor();
+
+      recorder.start(250);
+      setIsRecordingMessage(true);
+      setMessageDuration(0);
+      haptic.light();
+
+      messageTimerRef.current = setInterval(() => {
+        setMessageDuration((d) => d + 1);
+      }, 1000);
+    } catch {
+      // Microphone denied — silently ignore
+    }
+  }, [haptic, onVoiceMessage, stopVoiceMessageRecording]);
+
+  function formatMessageDuration(seconds: number): string {
+    const m = Math.floor(seconds / 60);
+    const s = seconds % 60;
+    return `${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
+  }
 
   function resizeTextarea() {
     const el = textareaRef.current;
@@ -252,7 +378,7 @@ export function ChatInput({ onSend, onFileAttach, onVoiceClip, onVideoCall, onVi
         />
 
         {/* Attachment buttons */}
-        <div className="flex gap-1">
+        <div className="flex items-center gap-1">
           <Tooltip>
             <TooltipTrigger asChild>
               <Button
@@ -260,7 +386,7 @@ export function ChatInput({ onSend, onFileAttach, onVoiceClip, onVideoCall, onVi
                 size="icon"
                 className="h-9 w-9 shrink-0"
                 onClick={() => fileInputRef.current?.click()}
-                disabled={disabled}
+                disabled={disabled || isRecordingMessage}
               >
                 <Paperclip className="h-4 w-4" />
               </Button>
@@ -275,7 +401,7 @@ export function ChatInput({ onSend, onFileAttach, onVoiceClip, onVideoCall, onVi
                 size="icon"
                 className="h-9 w-9 shrink-0"
                 onClick={() => cameraInputRef.current?.click()}
-                disabled={disabled}
+                disabled={disabled || isRecordingMessage}
                 aria-label="Take photo"
               >
                 <Camera className="h-4 w-4" />
@@ -284,34 +410,30 @@ export function ChatInput({ onSend, onFileAttach, onVoiceClip, onVideoCall, onVi
             <TooltipContent>{isTouchDevice ? 'Take photo' : 'Upload image'}</TooltipContent>
           </Tooltip>
 
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <Button
-                variant={isRecording ? 'destructive' : 'ghost'}
-                size="icon"
-                className="h-9 w-9 shrink-0"
-                onClick={isRecording ? () => stopRecording(true) : startRecording}
-                disabled={disabled}
-              >
-                {isRecording ? <MicOff className="h-4 w-4" /> : <Mic className="h-4 w-4" />}
-              </Button>
-            </TooltipTrigger>
-            <TooltipContent>{isRecording ? 'Stop recording' : 'Record voice'}</TooltipContent>
-          </Tooltip>
+          {/* Recording-in-progress indicator */}
+          {isRecordingMessage && (
+            <div className="flex items-center gap-1.5 rounded-full bg-red-500/10 px-2 py-1.5">
+              <span className="h-1.5 w-1.5 shrink-0 animate-pulse rounded-full bg-red-500" />
+              <span className="font-mono text-[11px] tabular-nums text-red-500">
+                {formatMessageDuration(messageDuration)}
+              </span>
+              <VoiceMessageBars level={messageAudioLevel} />
+            </div>
+          )}
 
           <Tooltip>
             <TooltipTrigger asChild>
               <Button
-                variant="ghost"
+                variant={isRecordingMessage ? 'destructive' : 'ghost'}
                 size="icon"
                 className="h-9 w-9 shrink-0"
-                onClick={onVideoCall}
-                disabled={disabled}
+                onClick={isRecordingMessage ? stopVoiceMessageRecording : startVoiceMessageRecording}
+                disabled={disabled || isRecording}
               >
-                <Video className="h-4 w-4" />
+                {isRecordingMessage ? <Square className="h-4 w-4" /> : <Mic2 className="h-4 w-4" />}
               </Button>
             </TooltipTrigger>
-            <TooltipContent>Video call</TooltipContent>
+            <TooltipContent>{isRecordingMessage ? 'Stop recording' : 'Record a Voice Message'}</TooltipContent>
           </Tooltip>
 
           <Tooltip>
@@ -321,7 +443,7 @@ export function ChatInput({ onSend, onFileAttach, onVoiceClip, onVideoCall, onVi
                 size="icon"
                 className="h-9 w-9 shrink-0"
                 onClick={onVideoRecord}
-                disabled={disabled}
+                disabled={disabled || isRecordingMessage}
               >
                 <Film className="h-4 w-4" />
               </Button>
@@ -332,12 +454,6 @@ export function ChatInput({ onSend, onFileAttach, onVoiceClip, onVideoCall, onVi
 
         {/* Text input */}
         <div className="relative flex-1">
-          {isRecording && (
-            <span className="absolute right-3 top-2 flex items-center gap-1 text-xs text-red-500">
-              <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-red-500" />
-              Listening…
-            </span>
-          )}
           <textarea
             ref={textareaRef}
             value={text}
@@ -347,8 +463,23 @@ export function ChatInput({ onSend, onFileAttach, onVoiceClip, onVideoCall, onVi
             placeholder={isRecording ? 'Speak now…' : 'Type a message…'}
             rows={1}
             disabled={disabled}
-            className="w-full resize-none rounded-lg border bg-background px-4 py-2.5 pr-20 text-sm ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50"
+            className="w-full resize-none rounded-lg border bg-background px-4 py-2.5 pr-12 text-sm ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50"
           />
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                type="button"
+                variant={isRecording ? 'destructive' : 'ghost'}
+                size="icon"
+                className="absolute bottom-1.5 right-1.5 h-7 w-7 shrink-0"
+                onClick={isRecording ? () => stopRecording(true) : startRecording}
+                disabled={disabled || isRecordingMessage}
+              >
+                {isRecording ? <MicOff className="h-4 w-4" /> : <Mic className="h-4 w-4" />}
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent>{isRecording ? 'Stop recording' : 'Voice chat'}</TooltipContent>
+          </Tooltip>
         </div>
 
         {/* Send button */}
@@ -361,6 +492,21 @@ export function ChatInput({ onSend, onFileAttach, onVoiceClip, onVideoCall, onVi
           <Send className="h-4 w-4" />
         </Button>
       </div>
+    </div>
+  );
+}
+
+function VoiceMessageBars({ level }: { level: number }) {
+  const bars = [0.5, 1, 0.75, 1.15, 0.6];
+  return (
+    <div className="flex h-3 items-center gap-0.5">
+      {bars.map((factor, i) => (
+        <div
+          key={i}
+          className="w-0.5 shrink-0 rounded-full bg-red-500 transition-all duration-100"
+          style={{ height: `${Math.max(2, level * factor * 12)}px` }}
+        />
+      ))}
     </div>
   );
 }

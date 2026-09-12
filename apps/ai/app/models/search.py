@@ -29,6 +29,9 @@ class RAGSearchRequest(BaseModel):
     conversation_history: list[dict[str, str]] = []
     system_prompt: str | None = None
     model: str | None = None
+    allowed_content_types: list[str] | None = None
+    allowed_categories: list[str] | None = None
+    temperature: float | None = None
 
 
 class RAGSearchResponse(BaseModel):
@@ -44,3 +47,6 @@ class RAGStreamRequest(BaseModel):
     conversation_history: list[dict[str, str]] = []
     system_prompt: str | None = None
     model: str | None = None
+    allowed_content_types: list[str] | None = None
+    allowed_categories: list[str] | None = None
+    temperature: float | None = None

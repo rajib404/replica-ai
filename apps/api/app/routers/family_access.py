@@ -1,13 +1,16 @@
 from fastapi import APIRouter, Depends, HTTPException, status
+from redis.asyncio import Redis
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.auth_guard import AuthContext, require_role
 from app.core.database import get_db
+from app.core.redis import get_redis
 from app.models.family_access import (
     AccessRuleListResponse,
     AccessRuleResponse,
-    AccessTemplateResponse,
     CreateAccessRuleRequest,
+    FamilyCodeResponse,
+    FamilyLoginRequest,
     FamilySessionResponse,
     FamilyVerifyRequest,
     GenerateInviteRequest,
@@ -131,6 +134,39 @@ async def verify_family(
         verification_value=body.verification_value,
         db=db,
     )
+
+
+# ─── Family Code (durable, non-expiring global entry point) ──
+
+
+@router.get("/family-code", response_model=FamilyCodeResponse)
+async def get_family_code(
+    auth: AuthContext = Depends(require_role("owner")),
+    db: AsyncSession = Depends(get_db),
+) -> FamilyCodeResponse:
+    """Get this owner's durable family code, generating one on first use."""
+    code = await manager.ensure_family_code(auth.subject_id, db)
+    return FamilyCodeResponse(family_code=code)
+
+
+@router.post("/family-code/regenerate", response_model=FamilyCodeResponse)
+async def regenerate_family_code(
+    auth: AuthContext = Depends(require_role("owner")),
+    db: AsyncSession = Depends(get_db),
+) -> FamilyCodeResponse:
+    """Replace this owner's family code with a new one, invalidating the old one."""
+    code = await manager.regenerate_family_code(auth.subject_id, db)
+    return FamilyCodeResponse(family_code=code)
+
+
+@router.post("/family-login", response_model=FamilySessionResponse)
+async def family_login(
+    body: FamilyLoginRequest,
+    db: AsyncSession = Depends(get_db),
+    redis: Redis = Depends(get_redis),
+) -> FamilySessionResponse:
+    """Public family sign-in via durable family code + name + secret — no invite link needed."""
+    return await manager.family_login(body, db, redis)
 
 
 # ─── Templates ──────────────────────────────────────────

@@ -8,6 +8,9 @@ class Settings(BaseSettings):
     # Ollama
     ollama_base_url: str = "http://localhost:11434"
     ollama_default_model: str = "mistral:7b-instruct"
+    # Chat models (llama3.2, mistral, etc.) don't support the embeddings
+    # capability — a dedicated embedding model is required for RAG.
+    ollama_embedding_model: str = "nomic-embed-text"
     ollama_request_timeout: float = 300.0  # 5 min for slow generations
 
     # Qdrant
@@ -21,6 +24,11 @@ class Settings(BaseSettings):
 
     # File storage
     storage_base_path: str = "./storage"
+
+    # faster-whisper model cache. Relative so it resolves under the
+    # container's /app WORKDIR in prod (matching the ai_model_cache volume
+    # mount) and under apps/ai/ in local dev.
+    whisper_model_cache_dir: str = "./model_cache"
 
     # CORS
     cors_origins: list[str] = ["http://localhost:3000", "http://localhost:8000"]

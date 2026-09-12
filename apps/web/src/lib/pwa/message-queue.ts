@@ -64,8 +64,13 @@ export async function queueChatMessage(
 
 export type SendFn = (msg: QueuedMessage) => Promise<void>;
 
-export async function flushQueue(send: SendFn): Promise<{ sent: number; failed: number }> {
-  const items = await listQueuedMessages();
+export async function flushQueue(
+  ownerId: string,
+  send: SendFn,
+): Promise<{ sent: number; failed: number }> {
+  // Only flush messages queued by the currently signed-in owner — other
+  // owners' queued messages stay put until they sign back in themselves.
+  const items = (await listQueuedMessages()).filter((m) => m.ownerId === ownerId);
   let sent = 0;
   let failed = 0;
 
@@ -91,7 +96,7 @@ export async function flushQueue(send: SendFn): Promise<{ sent: number; failed: 
   return { sent, failed };
 }
 
-export async function getQueueCount(): Promise<number> {
+export async function getQueueCount(ownerId: string): Promise<number> {
   const items = await listQueuedMessages();
-  return items.length;
+  return items.filter((m) => m.ownerId === ownerId).length;
 }

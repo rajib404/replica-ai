@@ -37,7 +37,7 @@ from app.models.identity import (
 )
 from app.models.knowledge import ContentType, KnowledgeEntry
 from app.models.owner import Owner
-from app.services.conversation import ConversationManager
+from app.services.conversation import ConversationManager, strip_source_labels
 from app.services.identity_guard import IdentityGuard, get_identity_guard
 from app.services.multilingual import LanguageEngine
 from app.services.personality import EmotionalSupport, PersonalityTracker
@@ -640,6 +640,8 @@ async def websocket_chat(
                     logger.exception("Streaming generation failed")
                     if not full_response:
                         full_response = "I'm sorry, I encountered an error generating a response."
+
+                full_response = strip_source_labels(full_response)
 
                 # Save assistant message using the same ID sent in token events
                 await conv.save_message(

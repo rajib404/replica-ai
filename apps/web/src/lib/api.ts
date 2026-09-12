@@ -2,6 +2,13 @@ const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:8000';
 
 type FetchOptions = RequestInit & {
   params?: Record<string, string>;
+  /**
+   * Explicit bearer token to use instead of the owner's stored access_token
+   * (e.g. a family session token). Passing this also skips the owner's
+   * 401-refresh-retry flow, since a family session has no refresh token —
+   * a 401 there means the session is invalid, not that it needs refreshing.
+   */
+  authToken?: string | null;
 };
 
 class ApiError extends Error {
@@ -92,7 +99,8 @@ async function refreshIfNeeded(): Promise<boolean> {
 }
 
 async function request<T>(path: string, options: FetchOptions = {}, isRetry = false): Promise<T> {
-  const { params, headers: customHeaders, ...rest } = options;
+  const { params, headers: customHeaders, authToken, ...rest } = options;
+  const usingExplicitToken = authToken !== undefined;
 
   let url = `${API_BASE}${path}`;
   if (params) {
@@ -105,7 +113,7 @@ async function request<T>(path: string, options: FetchOptions = {}, isRetry = fa
     ...(customHeaders as Record<string, string>),
   };
 
-  const token = getToken();
+  const token = usingExplicitToken ? authToken : getToken();
   if (token) {
     headers['Authorization'] = `Bearer ${token}`;
   }
@@ -121,8 +129,9 @@ async function request<T>(path: string, options: FetchOptions = {}, isRetry = fa
   }
 
   if (!response.ok) {
-    // Auto-refresh on 401 (once)
-    if (response.status === 401 && !isRetry) {
+    // Auto-refresh on 401 (once) — only for the owner's own session; a
+    // family session has no refresh token, so a 401 there is final.
+    if (response.status === 401 && !isRetry && !usingExplicitToken) {
       const refreshed = await refreshIfNeeded();
       if (refreshed) {
         return request<T>(path, options, true);

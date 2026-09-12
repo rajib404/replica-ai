@@ -2,7 +2,6 @@ from datetime import datetime
 
 from pydantic import BaseModel, Field
 
-
 # ─── Topic / Time restrictions ───────────────────────────
 
 
@@ -37,6 +36,8 @@ class CreateAccessRuleRequest(BaseModel):
     verification_value: str | None = Field(default=None, min_length=1, max_length=200)
     topic_restrictions: TopicRestrictions | None = None
     time_restrictions: TimeRestrictions | None = None
+    allowed_content_types: list[str] | None = None
+    allowed_information_categories: list[str] | None = None
     valid_until: datetime | None = None
     template_name: str | None = None
 
@@ -52,6 +53,8 @@ class UpdateAccessRuleRequest(BaseModel):
     verification_value: str | None = None
     topic_restrictions: TopicRestrictions | None = None
     time_restrictions: TimeRestrictions | None = None
+    allowed_content_types: list[str] | None = None
+    allowed_information_categories: list[str] | None = None
     is_active: bool | None = None
     valid_until: datetime | None = None
 
@@ -71,6 +74,8 @@ class AccessRuleResponse(BaseModel):
     valid_until: datetime | None = None
     topic_restrictions: dict | None = None
     time_restrictions: dict | None = None
+    allowed_content_types: list[str] | None = None
+    allowed_information_categories: list[str] | None = None
     template_name: str | None = None
     created_at: datetime
     updated_at: datetime
@@ -115,6 +120,18 @@ class FamilySessionResponse(BaseModel):
     grantee_name: str | None = None
     topic_restrictions: dict | None = None
     time_restrictions: dict | None = None
+
+
+# ─── Family Code (durable, non-expiring global entry point) ─
+
+class FamilyCodeResponse(BaseModel):
+    family_code: str
+
+
+class FamilyLoginRequest(BaseModel):
+    family_code: str = Field(min_length=4, max_length=32)
+    grantee_name: str = Field(min_length=1, max_length=100)
+    verification_value: str = Field(min_length=1, max_length=200)
 
 
 # ─── Templates ───────────────────────────────────────────

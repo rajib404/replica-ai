@@ -9,10 +9,81 @@ import { RuleCard } from '@/components/dashboard/rule-card';
 import { CreateRuleDialog } from '@/components/dashboard/create-rule-dialog';
 import { LegacyConfigPanel } from '@/components/dashboard/legacy-config-panel';
 import { FamilySessionsPanel } from '@/components/dashboard/family-sessions-panel';
+import { FamilyCodeCard } from '@/components/dashboard/family-code-card';
 import { api } from '@/lib/api';
 
+// Raw API shapes — the backend returns snake_case (Pydantic convention);
+// these get mapped to the camelCase @replica-ai/shared types below before
+// use, since nothing else in the request pipeline does that conversion.
+interface RawAccessRule {
+  id: string;
+  owner_id: string;
+  grantee_name: string;
+  grantee_relation: string | null;
+  access_level: string;
+  verification_method: string;
+  is_active: boolean;
+  valid_from: string | null;
+  valid_until: string | null;
+  topic_restrictions: { allowed: string[]; blocked: string[] } | null;
+  time_restrictions: Record<string, unknown> | null;
+  allowed_content_types: string[] | null;
+  allowed_information_categories: string[] | null;
+  template_name: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+interface RawLegacyConfig {
+  id: string;
+  owner_id: string;
+  trigger_type: string;
+  inactivity_days: number;
+  trusted_person_rule_id: string | null;
+  is_active: boolean;
+  activated_at: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+function mapAccessRule(r: RawAccessRule): AccessRule {
+  return {
+    id: r.id,
+    ownerId: r.owner_id,
+    granteeName: r.grantee_name,
+    granteeRelation: r.grantee_relation,
+    accessLevel: r.access_level as AccessRule['accessLevel'],
+    verificationMethod: r.verification_method as AccessRule['verificationMethod'],
+    isActive: r.is_active,
+    validFrom: r.valid_from,
+    validUntil: r.valid_until,
+    topicRestrictions: r.topic_restrictions,
+    timeRestrictions: r.time_restrictions as AccessRule['timeRestrictions'],
+    allowedContentTypes: r.allowed_content_types,
+    allowedInformationCategories: r.allowed_information_categories,
+    templateName: r.template_name,
+    createdAt: r.created_at,
+    updatedAt: r.updated_at,
+  };
+}
+
+function mapLegacyConfig(c: RawLegacyConfig | null): LegacyConfig | null {
+  if (!c) return null;
+  return {
+    id: c.id,
+    ownerId: c.owner_id,
+    triggerType: c.trigger_type as LegacyConfig['triggerType'],
+    inactivityDays: c.inactivity_days,
+    trustedPersonRuleId: c.trusted_person_rule_id,
+    isActive: c.is_active,
+    activatedAt: c.activated_at,
+    createdAt: c.created_at,
+    updatedAt: c.updated_at,
+  };
+}
+
 interface RuleListResponse {
-  rules: AccessRule[];
+  rules: RawAccessRule[];
   total: number;
 }
 
@@ -48,11 +119,11 @@ export default function FamilyAccessPage() {
       const [rulesData, templatesData, legacyData] = await Promise.all([
         api.get<RuleListResponse>('/api/access/rules'),
         api.get<TemplateListResponse>('/api/access/templates'),
-        api.get<LegacyConfig | null>('/api/access/legacy'),
+        api.get<RawLegacyConfig | null>('/api/access/legacy'),
       ]);
-      setRules(rulesData.rules);
+      setRules(rulesData.rules.map(mapAccessRule));
       setTemplates(templatesData.templates);
-      setLegacyConfig(legacyData);
+      setLegacyConfig(mapLegacyConfig(legacyData));
     } catch (err) {
       if (err instanceof api.ApiError) {
         setError(err.detail);
@@ -119,6 +190,8 @@ export default function FamilyAccessPage() {
         </div>
       )}
 
+      <FamilyCodeCard />
+
       {loading && rules.length === 0 ? (
         <div className="flex h-48 items-center justify-center text-muted-foreground">
           Loading access rules...
@@ -137,6 +210,7 @@ export default function FamilyAccessPage() {
               rule={rule}
               onToggle={handleToggle}
               onDelete={handleDelete}
+              onUpdated={fetchData}
             />
           ))}
         </div>

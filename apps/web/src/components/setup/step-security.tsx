@@ -17,10 +17,11 @@ interface StepSecurityProps {
 
 export function StepSecurity({ data, onChange, onBack, onNext }: StepSecurityProps) {
   const [showSecret, setShowSecret] = useState(false);
+  const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
 
-  const isValid = data.secretValue.trim().length >= 3;
+  const isValid = data.password.trim().length >= 8 && data.secretValue.trim().length >= 3;
 
   async function handleSubmit() {
     setLoading(true);
@@ -30,6 +31,7 @@ export function StepSecurity({ data, onChange, onBack, onNext }: StepSecurityPro
       const body: Record<string, string> = {
         name: data.name,
         preferred_language: data.preferredLanguage,
+        password: data.password,
       };
       if (data.email) body.email = data.email;
       else body.email = `${data.name.toLowerCase().replace(/[^a-z0-9]/g, '.')}@replica-ai.dev`;
@@ -74,13 +76,46 @@ export function StepSecurity({ data, onChange, onBack, onNext }: StepSecurityPro
       <div className="space-y-2">
         <h2 className="text-xl font-bold">Security Setup</h2>
         <p className="text-sm text-muted-foreground">
-          Choose how family members will verify their identity to access your Replica.
+          Set your sign-in password, then choose how family members can recover access if they
+          ever need to.
         </p>
       </div>
 
       <div className="space-y-4">
-        <div className="space-y-3">
-          <Label>Verification Method</Label>
+        <div className="space-y-2">
+          <Label htmlFor="password">Password</Label>
+          <div className="relative">
+            <Input
+              id="password"
+              type={showPassword ? 'text' : 'password'}
+              placeholder="At least 8 characters"
+              value={data.password}
+              onChange={(e) => onChange({ password: e.target.value })}
+              className="pr-10"
+              autoComplete="new-password"
+            />
+            <button
+              type="button"
+              onClick={() => setShowPassword(!showPassword)}
+              className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+            >
+              {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+            </button>
+          </div>
+          <p className="text-xs text-muted-foreground">
+            This is what you&apos;ll use to sign in. Minimum 8 characters.
+          </p>
+        </div>
+
+        <div className="space-y-3 border-t pt-4">
+          <div>
+            <Label>Family Recovery Method</Label>
+            <p className="text-xs text-muted-foreground">
+              A separate secret &mdash; not your password &mdash; that you can share with family so
+              they can recover access to your Replica if you&apos;re ever unable to sign in
+              yourself.
+            </p>
+          </div>
           <div className="grid grid-cols-2 gap-3">
             <button
               type="button"

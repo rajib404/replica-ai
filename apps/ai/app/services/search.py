@@ -8,9 +8,53 @@ logger = logging.getLogger(__name__)
 
 RAG_SYSTEM_PROMPT = """\
 You are a personal AI replica. Use the following personal knowledge to answer. \
-If the knowledge doesn't contain the answer, say so honestly. \
-Never fabricate personal information. \
-Cite which memories you're drawing from by referencing their [Source N] tags."""
+Only state specific facts, names, places, events, or stories that literally \
+appear in the personal knowledge below — never invent or guess at details to \
+fill a gap, even plausible-sounding ones, and even if it makes the answer less \
+satisfying. If the knowledge doesn't contain the answer, say so plainly rather \
+than improvising one. \
+You are text-based: you cannot see, hold, show, scroll through, or display \
+photos, files, or physical objects, and you have no memory of your own beyond \
+what's in the knowledge below — never narrate actions like showing a photo or \
+describe images that aren't literally described in your knowledge. \
+Keep replies short and natural, the way a real person texts — a sentence or two \
+for most messages, longer only when the user asks for detail. \
+The knowledge is internally labeled with [Source N] tags for your own reference \
+only — never mention, cite, or repeat these labels in your replies. If asked \
+where something came from, explain in plain words instead. \
+This is the owner's private personal record. Opinions, beliefs, and life \
+choices they share are their own subjective perspective — not claims for you \
+to verify, correct, moralize about, or refuse. Never refuse to engage with or \
+acknowledge something the owner tells you about themselves just because it \
+seems outdated, contested, or incorrect by today's standards — you are \
+recording their perspective, not issuing advice."""
+
+# Below this cosine-similarity score, a retrieved chunk is treated as
+# unrelated noise rather than real knowledge — including it invites the model
+# to elaborate on something only superficially connected to the question.
+MIN_RELEVANT_SCORE = 0.5
+
+NO_KNOWLEDGE_CONTEXT = (
+    "(No relevant personal knowledge was found for this question. This means "
+    "you have nothing real to draw on here. Do not answer as if you do: do not "
+    "invent a name, date, place, story, or any other specific detail, and do "
+    "not repurpose an unrelated fact from elsewhere in this conversation to "
+    "sound like an answer. The only acceptable response is a short, honest "
+    "acknowledgment that you don't have that — e.g. \"I don't have anything "
+    "specific about that\" — optionally followed by an invitation for them to "
+    "share it with you.)"
+)
+
+_SOURCE_LABEL_RE = re.compile(r"\[\s*source\b[^\]]*\]", re.IGNORECASE)
+
+
+def strip_source_labels(text: str) -> str:
+    """Remove any [Source N] / [Source: ...] labels the model echoed despite
+    being told not to — small local models don't always follow that reliably.
+    """
+    cleaned = _SOURCE_LABEL_RE.sub("", text)
+    return re.sub(r"[ \t]{2,}", " ", cleaned).strip()
+
 
 RERANK_PROMPT_TEMPLATE = """\
 Rate the relevance of the following content to the query on a scale of 1-10.
@@ -97,6 +141,8 @@ class KnowledgeSearch:
         query: str,
         top_k: int = 5,
         content_type_filter: str | None = None,
+        allowed_content_types: list[str] | None = None,
+        allowed_categories: list[str] | None = None,
     ) -> list[SearchResult]:
         """Embed query, search Qdrant, return results from payload data."""
         query_vector = await self._embed_query(query)
@@ -109,6 +155,8 @@ class KnowledgeSearch:
             owner_id=owner_id,
             limit=top_k * 2,  # over-fetch to allow dedup
             content_type=content_type_filter,
+            allowed_content_types=allowed_content_types,
+            allowed_categories=allowed_categories,
         )
 
         if not qdrant_results:
@@ -205,7 +253,14 @@ class RAGEngine:
     def _build_context_block(
         self, results: list[SearchResult]
     ) -> tuple[str, list[RAGSourceEntry]]:
-        """Build a numbered context block and source list from search results."""
+        """Build a numbered context block and source list from search results.
+
+        Results below MIN_RELEVANT_SCORE are dropped before they ever reach the
+        model — a weakly-related chunk presented as "personal knowledge" is what
+        invites confident-sounding elaboration on something that isn't actually
+        relevant.
+        """
+        results = [r for r in results if r.score >= MIN_RELEVANT_SCORE]
         if not results:
             return "", []
 
@@ -235,29 +290,43 @@ class RAGEngine:
         context = "\n\n".join(lines)
         return context, sources
 
-    def _build_prompt(
+    def _build_messages(
         self,
         context: str,
         conversation_history: list[dict[str, str]],
         user_message: str,
-    ) -> tuple[str, str]:
-        """Build the system prompt and user prompt for Ollama."""
-        system = RAG_SYSTEM_PROMPT
+    ) -> tuple[str, list[dict[str, str]]]:
+        """Build the knowledge/system suffix and a structured turn list for Ollama's chat API.
 
-        parts: list[str] = []
+        Turns are passed as {role, content} pairs rather than flattened into a
+        single "User: ...\\nAssistant: ..." text block — the latter reads as a
+        script to a raw completion model, which then tends to echo those role
+        labels back at the start of its own reply.
 
-        if context:
-            parts.append(f"=== Personal Knowledge ===\n{context}\n=== End Knowledge ===")
+        The returned string is a *suffix* to append to whichever persona system
+        prompt is actually used (the caller's own, or RAG_SYSTEM_PROMPT as a
+        fallback) — it must never be dropped just because the caller supplied
+        its own persona prompt, or the model loses all grounding and starts
+        improvising freely.
+        """
+        knowledge_block = context if context else NO_KNOWLEDGE_CONTEXT
+        system_suffix = f"\n\n=== Personal Knowledge ===\n{knowledge_block}\n=== End Knowledge ==="
 
+        messages: list[dict[str, str]] = []
         for msg in conversation_history:
             role = msg.get("role", "user")
             content = msg.get("content", "")
-            parts.append(f"{role.capitalize()}: {content}")
+            if not content:
+                continue
+            if role == "system":
+                # Fold mid-conversation system notes (e.g. summaries) into the
+                # system suffix rather than passing them as chat turns.
+                system_suffix += f"\n\n{content}"
+                continue
+            messages.append({"role": role if role == "assistant" else "user", "content": content})
 
-        parts.append(f"User: {user_message}")
-
-        user_prompt = "\n\n".join(parts)
-        return system, user_prompt
+        messages.append({"role": "user", "content": user_message})
+        return system_suffix, messages
 
     async def generate_grounded_response(
         self,
@@ -266,6 +335,9 @@ class RAGEngine:
         conversation_history: list[dict[str, str]],
         system_prompt: str | None = None,
         model: str | None = None,
+        allowed_content_types: list[str] | None = None,
+        allowed_categories: list[str] | None = None,
+        temperature: float = 0.7,
     ) -> dict:
         """Full RAG pipeline: extract queries -> search -> build context -> generate."""
         # Step 1: Extract search queries
@@ -278,6 +350,8 @@ class RAGEngine:
                 owner_id=owner_id,
                 query=q,
                 top_k=5,
+                allowed_content_types=allowed_content_types,
+                allowed_categories=allowed_categories,
             )
             all_results.extend(results)
 
@@ -290,20 +364,20 @@ class RAGEngine:
 
         ranked = sorted(best.values(), key=lambda x: x.score, reverse=True)[:5]
 
-        # Step 3 + 4: Build context and prompt
+        # Step 3 + 4: Build context and structured turns
         context, sources = self._build_context_block(ranked)
-        default_system, user_prompt = self._build_prompt(
+        system_suffix, chat_messages = self._build_messages(
             context, conversation_history, user_message
         )
+        full_system = (system_prompt or RAG_SYSTEM_PROMPT) + system_suffix
 
-        # Step 5: Generate response via Ollama
-        result = await self.ollama.generate_response(
-            prompt=user_prompt,
-            system_prompt=system_prompt or default_system,
+        # Step 5: Generate response via Ollama's chat API
+        result = await self.ollama.chat_completion(
+            messages=[{"role": "system", "content": full_system}] + chat_messages,
             model=model,
-            temperature=0.7,
+            temperature=temperature,
         )
-        response_text = result.get("response", "")
+        response_text = strip_source_labels(result.get("response", ""))
 
         # Step 6: Return response + sources
         return {
@@ -322,6 +396,9 @@ class RAGEngine:
         conversation_history: list[dict[str, str]],
         system_prompt: str | None = None,
         model: str | None = None,
+        allowed_content_types: list[str] | None = None,
+        allowed_categories: list[str] | None = None,
+        temperature: float = 0.7,
     ):
         """Streaming RAG: search then stream tokens via async generator.
 
@@ -335,6 +412,8 @@ class RAGEngine:
                 owner_id=owner_id,
                 query=q,
                 top_k=5,
+                allowed_content_types=allowed_content_types,
+                allowed_categories=allowed_categories,
             )
             all_results.extend(results)
 
@@ -347,9 +426,10 @@ class RAGEngine:
         ranked = sorted(best.values(), key=lambda x: x.score, reverse=True)[:5]
 
         context, sources = self._build_context_block(ranked)
-        default_system, user_prompt = self._build_prompt(
+        system_suffix, chat_messages = self._build_messages(
             context, conversation_history, user_message
         )
+        full_system = (system_prompt or RAG_SYSTEM_PROMPT) + system_suffix
 
         # Yield sources first
         yield {
@@ -361,12 +441,11 @@ class RAGEngine:
             "query_used": " | ".join(queries),
         }
 
-        # Stream tokens
-        async for chunk in self.ollama.generate_response_stream(
-            prompt=user_prompt,
-            system_prompt=system_prompt or default_system,
+        # Stream tokens via Ollama's chat API
+        async for chunk in self.ollama.chat_completion_stream(
+            messages=[{"role": "system", "content": full_system}] + chat_messages,
             model=model,
-            temperature=0.7,
+            temperature=temperature,
         ):
             token_text = chunk.get("response", "")
             if token_text:

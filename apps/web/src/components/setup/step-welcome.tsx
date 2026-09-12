@@ -1,5 +1,6 @@
 'use client';
 
+import Link from 'next/link';
 import { Shield, Brain, Lock } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 
@@ -56,6 +57,13 @@ export function StepWelcome({ onNext }: StepWelcomeProps) {
       <Button className="w-full" size="lg" onClick={onNext}>
         Get Started
       </Button>
+
+      <p className="text-center text-sm text-muted-foreground">
+        Already have a Replica?{' '}
+        <Link href="/login" className="font-medium text-primary underline-offset-4 hover:underline">
+          Sign in
+        </Link>
+      </p>
     </div>
   );
 }

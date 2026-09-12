@@ -44,13 +44,12 @@ export default function FamilyJoinPage() {
       });
 
       if (resp.verified && resp.session_token) {
-        // Store the family session token
+        // Store the family session token under its own key — never the
+        // owner's access_token, so an owner session in another tab of the
+        // same browser can never be clobbered by a family login.
         localStorage.setItem('family_token', resp.session_token);
         localStorage.setItem('family_grantee_name', resp.grantee_name ?? '');
         localStorage.setItem('family_access_level', resp.access_level ?? '');
-
-        // Also set as the regular access_token so the api client picks it up
-        localStorage.setItem('access_token', resp.session_token);
 
         setSessionInfo({
           grantee_name: resp.grantee_name ?? 'Friend',

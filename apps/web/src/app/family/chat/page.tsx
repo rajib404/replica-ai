@@ -8,19 +8,17 @@ import {
   Wifi,
   WifiOff,
   AlertCircle,
+  LogOut,
   Shield,
   Flower2,
   Send,
+  Archive,
 } from 'lucide-react';
 import { MessageBubble, type ChatMessage } from '@/components/chat/message-bubble';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
-import {
-  useChatSocket,
-  type ConnectionStatus,
-  type ChatSource,
-} from '@/lib/use-chat-socket';
+import { type ConnectionStatus, type ChatSource } from '@/lib/use-chat-socket';
 import { api } from '@/lib/api';
 
 interface SessionInfo {
@@ -50,17 +48,27 @@ export default function FamilyChatPage() {
   const scrollRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
+  function handleSignOut() {
+    localStorage.removeItem('family_token');
+    localStorage.removeItem('family_grantee_name');
+    localStorage.removeItem('family_access_level');
+    router.push('/family-access');
+  }
+
+  const [connStatus, setConnStatus] = useState<ConnectionStatus>('connecting');
+
   // Check we have a family token
   useEffect(() => {
     const token = localStorage.getItem('family_token');
     if (!token) {
-      router.push('/');
+      router.push('/family-access');
       return;
     }
 
     // Fetch session info
-    api.get<SessionInfo>('/api/family/chat/session').then((info) => {
+    api.get<SessionInfo>('/api/family/chat/session', { authToken: token }).then((info) => {
       setSession(info);
+      setConnStatus('connected');
 
       // Add welcome message
       const welcomeText = info.legacy_mode_active
@@ -76,7 +84,7 @@ export default function FamilyChatPage() {
         },
       ]);
     }).catch(() => {
-      router.push('/');
+      router.push('/family-access');
     });
   }, [router]);
 
@@ -91,40 +99,6 @@ export default function FamilyChatPage() {
     scrollToBottom();
   }, [messages, isTyping, scrollToBottom]);
 
-  const handleToken = useCallback((token: string, messageId: string) => {
-    setIsTyping(false);
-    setMessages((prev) => {
-      const idx = prev.findIndex((m) => m.id === messageId);
-      if (idx >= 0) {
-        const updated = [...prev];
-        updated[idx] = { ...updated[idx], content: updated[idx].content + token };
-        return updated;
-      }
-      return [...prev, {
-        id: messageId,
-        role: 'assistant' as const,
-        content: token,
-        timestamp: new Date(),
-        isStreaming: true,
-      }];
-    });
-    setStreamingMessageId(messageId);
-  }, []);
-
-  const handleDone = useCallback(
-    (messageId: string, newThreadId: string, sources: ChatSource[]) => {
-      setThreadId(newThreadId);
-      setStreamingMessageId(null);
-      setIsTyping(false);
-      setMessages((prev) =>
-        prev.map((m) =>
-          m.id === messageId ? { ...m, isStreaming: false, sources } : m,
-        ),
-      );
-    },
-    [],
-  );
-
   const handleError = useCallback((detail: string) => {
     setIsTyping(false);
     setStreamingMessageId(null);
@@ -135,21 +109,6 @@ export default function FamilyChatPage() {
       timestamp: new Date(),
     }]);
   }, []);
-
-  // Use the family WebSocket endpoint
-  const ownerId = session?.owner_id ?? '';
-
-  const { status, sendMessage } = useChatSocket({
-    ownerId,
-    onToken: handleToken,
-    onDone: (msgId, tid, sources) => handleDone(msgId, tid, sources),
-    onLearning: () => {},
-    onError: handleError,
-  });
-
-  // Override: we need to use the family WS endpoint, not the owner one.
-  // The useChatSocket hook connects to /ws/chat/{ownerId} but we need /ws/family/chat/{ownerId}.
-  // For now we use REST fallback. We'll build a dedicated hook below.
 
   function handleSend() {
     const trimmed = text.trim();
@@ -180,9 +139,10 @@ export default function FamilyChatPage() {
       }>('/api/family/chat', {
         message,
         thread_id: threadId ?? null,
-      });
+      }, { authToken: localStorage.getItem('family_token') });
 
       setThreadId(resp.thread_id);
+      setConnStatus('connected');
       setMessages((prev) => [...prev, {
         id: resp.message_id,
         role: 'assistant',
@@ -192,6 +152,7 @@ export default function FamilyChatPage() {
       }]);
     } catch (err) {
       const detail = err instanceof api.ApiError ? err.detail : 'Failed to send message';
+      setConnStatus('error');
       handleError(detail);
     } finally {
       setIsTyping(false);
@@ -257,7 +218,25 @@ export default function FamilyChatPage() {
             <Shield className="mr-1 h-3 w-3" />
             {ACCESS_LABELS[session.access_level] ?? session.access_level}
           </Badge>
-          <StatusDot status={status} />
+          <StatusDot status={connStatus} />
+          <Button
+            variant="ghost"
+            size="icon"
+            className="h-8 w-8"
+            onClick={() => router.push('/family/assets')}
+            title="Shared photos & files"
+          >
+            <Archive className="h-4 w-4" />
+          </Button>
+          <Button
+            variant="ghost"
+            size="icon"
+            className="h-8 w-8"
+            onClick={handleSignOut}
+            title="Sign out"
+          >
+            <LogOut className="h-4 w-4" />
+          </Button>
         </div>
       </div>
 
@@ -278,7 +257,11 @@ export default function FamilyChatPage() {
       <ScrollArea ref={scrollRef} className="flex-1">
         <div className="mx-auto max-w-3xl py-4">
           {messages.map((msg) => (
-            <MessageBubble key={msg.id} message={msg} />
+            <MessageBubble
+              key={msg.id}
+              message={msg}
+              authToken={typeof window !== 'undefined' ? localStorage.getItem('family_token') : null}
+            />
           ))}
 
           {isTyping && !streamingMessageId && (

@@ -15,8 +15,10 @@ build: ## Build all packages and apps
 
 install: ## Install all dependencies
 	npm install
-	cd apps/api && python -m venv .venv && . .venv/bin/activate && pip install -e ".[dev]"
-	cd apps/ai && python -m venv .venv && . .venv/bin/activate && pip install -e ".[dev]"
+	# apps/api pins Python 3.11: pydub (voice chat) depends on the stdlib
+	# `audioop` module, which Python 3.13 removed outright.
+	cd apps/api && python3.11 -m venv .venv && . .venv/bin/activate && pip install -e ".[dev]"
+	cd apps/ai && python3 -m venv .venv && . .venv/bin/activate && pip install -e ".[dev]"
 
 # ─── Database ─────────────────────────────────────────────
 

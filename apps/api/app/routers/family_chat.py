@@ -5,7 +5,7 @@ import logging
 import uuid
 
 import redis.asyncio as aioredis
-from fastapi import APIRouter, Depends, HTTPException, Request, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, Depends, HTTPException, WebSocket, WebSocketDisconnect
 from jose import JWTError
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -27,6 +27,7 @@ from app.models.family_chat import (
     ConversationLogMessage,
     ConversationLogResponse,
     FamilyAnalyticsResponse,
+    FamilyAssetListResponse,
     FamilyChatMessageRequest,
     FamilyChatMessageResponse,
     FamilyMemberAnalytics,
@@ -36,8 +37,9 @@ from app.models.family_chat import (
     InterveneSendRequest,
 )
 from app.models.owner import AccessRule
-from app.services.conversation import ConversationManager
-from app.services.family_chat import FamilyConversationHandler
+from app.services.conversation import ConversationManager, strip_source_labels
+from app.services.family_access import list_family_assets, resolve_family_scope
+from app.services.family_chat import FAMILY_CHAT_TEMPERATURE, FamilyConversationHandler
 
 logger = logging.getLogger(__name__)
 
@@ -46,32 +48,18 @@ router = APIRouter(tags=["family-chat"])
 handler = FamilyConversationHandler()
 
 
-# ─── Custom dependency: family member JWT claims ─────────
+# ─── Family member auth (thin wrapper over the shared AuthContext) ──
 
 
-async def _get_family_claims(request: Request) -> dict:
-    """Extract family member claims from the JWT in the Authorization header.
+async def _require_family_member(
+    auth: AuthContext = Depends(require_role("family_member")),
+) -> AuthContext:
+    """Require a family_member JWT and return its resolved AuthContext.
 
-    The family_member JWT (created by POST /api/access/verify) carries extra
-    claims: rule_id, access_level, grantee_name. AuthContext doesn't expose
-    these, so we decode the token directly.
+    `auth.subject_id` is the owner's id, `auth.rule_id`/`auth.access_level`/
+    `auth.grantee_name` are the session's scoping claims (see auth_guard.py).
     """
-    auth_header = request.headers.get("Authorization", "")
-    if not auth_header.startswith("Bearer "):
-        raise HTTPException(status_code=401, detail="Missing bearer token")
-    token = auth_header[7:]
-    try:
-        payload = decode_token(token)
-    except JWTError as e:
-        raise HTTPException(status_code=401, detail=f"Invalid token: {e}") from e
-    if payload.get("role") != "family_member":
-        raise HTTPException(status_code=403, detail="Family member access required.")
-    return {
-        "owner_id": payload["sub"],
-        "rule_id": payload.get("rule_id", ""),
-        "access_level": payload.get("access_level", "limited"),
-        "grantee_name": payload.get("grantee_name", "Family Member"),
-    }
+    return auth
 
 
 # ─── Family Member Chat (REST) ──────────────────────────
@@ -80,23 +68,23 @@ async def _get_family_claims(request: Request) -> dict:
 @router.post("/api/family/chat", response_model=FamilyChatMessageResponse)
 async def family_send_message(
     body: FamilyChatMessageRequest,
-    claims: dict = Depends(_get_family_claims),
+    auth: AuthContext = Depends(_require_family_member),
     db: AsyncSession = Depends(get_db),
     r: aioredis.Redis = Depends(get_redis),
     ai: AIServiceClient = Depends(get_ai_client),
 ) -> FamilyChatMessageResponse:
     """Send a chat message as a family member (non-streaming)."""
     rule_result = await db.execute(
-        select(AccessRule).where(AccessRule.id == claims["rule_id"])
+        select(AccessRule).where(AccessRule.id == auth.rule_id)
     )
     rule = rule_result.scalar_one_or_none()
 
     response_text, msg_id, thread_id, sources = await handler.process_family_message(
-        owner_id=claims["owner_id"],
-        grantee_name=claims["grantee_name"],
+        owner_id=auth.subject_id,
+        grantee_name=auth.grantee_name or "Family Member",
         relation=rule.grantee_relation if rule else None,
-        access_level=claims["access_level"],
-        rule_id=claims["rule_id"],
+        access_level=auth.access_level or "limited",
+        rule_id=auth.rule_id or "",
         topic_restrictions=rule.topic_restrictions if rule else None,
         time_restrictions=rule.time_restrictions if rule else None,
         text=body.message,
@@ -119,18 +107,31 @@ async def family_send_message(
 
 @router.get("/api/family/chat/session", response_model=FamilySessionInfoResponse)
 async def family_session_info(
-    claims: dict = Depends(_get_family_claims),
+    auth: AuthContext = Depends(_require_family_member),
     db: AsyncSession = Depends(get_db),
 ) -> FamilySessionInfoResponse:
     """Get session info for the current family member (owner name, access level, etc.)."""
     info = await handler.get_family_session_info(
-        owner_id=claims["owner_id"],
-        grantee_name=claims["grantee_name"],
-        access_level=claims["access_level"],
-        rule_id=claims["rule_id"],
+        owner_id=auth.subject_id,
+        grantee_name=auth.grantee_name or "Family Member",
+        access_level=auth.access_level or "limited",
+        rule_id=auth.rule_id or "",
         db=db,
     )
     return FamilySessionInfoResponse(**info)
+
+
+# ─── Family Assets (read-only, scoped by access rule) ────
+
+
+@router.get("/api/family/assets", response_model=FamilyAssetListResponse)
+async def family_list_assets(
+    auth: AuthContext = Depends(_require_family_member),
+    db: AsyncSession = Depends(get_db),
+) -> FamilyAssetListResponse:
+    """List the owner's knowledge entries this family member is allowed to see."""
+    entries = await list_family_assets(auth, db)
+    return FamilyAssetListResponse(entries=entries, total=len(entries))
 
 
 # ─── Family Chat WebSocket ───────────────────────────────
@@ -185,9 +186,16 @@ async def family_websocket_chat(
         await websocket.close(code=4003)
         return
 
-    grantee_name = auth_payload.get("grantee_name", "Family Member")
-    access_level = auth_payload.get("access_level", "limited")
-    rule_id = auth_payload.get("rule_id", "")
+    auth = AuthContext(
+        subject_id=subject_id,
+        role="family_member",
+        rule_id=auth_payload.get("rule_id"),
+        access_level=auth_payload.get("access_level", "limited"),
+        grantee_name=auth_payload.get("grantee_name", "Family Member"),
+    )
+    grantee_name = auth.grantee_name or "Family Member"
+    access_level = auth.access_level or "limited"
+    rule_id = auth.rule_id or ""
 
     await websocket.send_json({
         "type": "auth_ok",
@@ -272,6 +280,7 @@ async def family_websocket_chat(
                 assistant_msg_id = str(uuid.uuid4())
                 full_response = ""
                 sources: list[dict] = []
+                scope = await resolve_family_scope(auth, db)
 
                 try:
                     async for event in ai.rag_stream(
@@ -279,6 +288,9 @@ async def family_websocket_chat(
                         message=text,
                         conversation_history=context,
                         system_prompt=system_prompt,
+                        allowed_content_types=scope.allowed_content_types,
+                        allowed_categories=scope.allowed_categories,
+                        temperature=FAMILY_CHAT_TEMPERATURE,
                     ):
                         event_type = event.get("type", "")
                         if event_type == "sources":
@@ -299,6 +311,8 @@ async def family_websocket_chat(
                     logger.exception("Family streaming generation failed")
                     if not full_response:
                         full_response = "I'm sorry, I encountered an error."
+
+                full_response = strip_source_labels(full_response)
 
                 # Save assistant response
                 assistant_msg = await conv.save_message(

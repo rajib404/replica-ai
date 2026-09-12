@@ -13,7 +13,85 @@ import {
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import { Checkbox } from '@/components/ui/checkbox';
 import { api } from '@/lib/api';
+
+export const CONTENT_TYPES = [
+  { value: 'text', label: 'Text' },
+  { value: 'audio', label: 'Audio' },
+  { value: 'image', label: 'Photos' },
+  { value: 'video', label: 'Video' },
+  { value: 'document', label: 'Documents' },
+] as const;
+
+export const INFORMATION_CATEGORIES = [
+  { value: 'memories_stories', label: 'Memories & Stories' },
+  { value: 'photos_videos', label: 'Photos & Videos' },
+  { value: 'voice_recordings', label: 'Voice Recordings' },
+  { value: 'health_medical', label: 'Health & Medical' },
+  { value: 'financial', label: 'Financial' },
+  { value: 'legal_official', label: 'Legal & Official' },
+  { value: 'relationships_family', label: 'Relationships & Family' },
+  { value: 'career_work', label: 'Career & Work' },
+  { value: 'beliefs_values', label: 'Beliefs & Values' },
+  { value: 'traditions_recipes', label: 'Traditions & Recipes' },
+  { value: 'advice_wisdom', label: 'Advice & Wisdom' },
+  { value: 'general', label: 'General' },
+] as const;
+
+export function CategoryCheckboxGroup({
+  title,
+  options,
+  selected,
+  onChange,
+  disabled,
+}: {
+  title: string;
+  options: readonly { value: string; label: string }[];
+  selected: Set<string>;
+  onChange: (next: Set<string>) => void;
+  disabled?: boolean;
+}) {
+  function toggle(value: string) {
+    const next = new Set(selected);
+    if (next.has(value)) next.delete(value);
+    else next.add(value);
+    onChange(next);
+  }
+
+  return (
+    <div className="space-y-2">
+      <Label>{title}</Label>
+      <div className="grid grid-cols-2 gap-x-4 gap-y-2 rounded-md border p-3 sm:grid-cols-3">
+        {options.map((opt) => (
+          <label
+            key={opt.value}
+            className="flex items-center gap-2 text-xs font-medium leading-none"
+          >
+            <Checkbox
+              checked={selected.has(opt.value)}
+              onCheckedChange={() => toggle(opt.value)}
+              disabled={disabled}
+            />
+            {opt.label}
+          </label>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+export const ALL_CONTENT_TYPES = new Set(CONTENT_TYPES.map((c) => c.value));
+export const ALL_INFORMATION_CATEGORIES = new Set(INFORMATION_CATEGORIES.map((c) => c.value));
+
+/** `null` (unrestricted) when everything is selected — only send an explicit
+ * list once the owner has actually narrowed it down. */
+export function toAllowedList(
+  selected: Set<string>,
+  all: Set<string>,
+): string[] | null {
+  return selected.size >= all.size ? null : Array.from(selected);
+}
 
 const RELATIONS = [
   { value: 'spouse', label: 'Spouse' },
@@ -70,6 +148,8 @@ export function CreateRuleDialog({ templates, onCreated }: CreateRuleDialogProps
   const [verificationMethod, setVerificationMethod] = useState('none');
   const [verificationValue, setVerificationValue] = useState('');
   const [templateName, setTemplateName] = useState<string | null>(null);
+  const [allowedContentTypes, setAllowedContentTypes] = useState<Set<string>>(new Set(ALL_CONTENT_TYPES));
+  const [allowedCategories, setAllowedCategories] = useState<Set<string>>(new Set(ALL_INFORMATION_CATEGORIES));
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState('');
 
@@ -88,6 +168,8 @@ export function CreateRuleDialog({ templates, onCreated }: CreateRuleDialogProps
     setVerificationMethod('none');
     setVerificationValue('');
     setTemplateName(null);
+    setAllowedContentTypes(new Set(ALL_CONTENT_TYPES));
+    setAllowedCategories(new Set(ALL_INFORMATION_CATEGORIES));
     setStep('choose');
     setError('');
   }
@@ -109,6 +191,8 @@ export function CreateRuleDialog({ templates, onCreated }: CreateRuleDialogProps
         access_level: accessLevel,
         verification_method: verificationMethod,
         verification_value: verificationValue || null,
+        allowed_content_types: toAllowedList(allowedContentTypes, ALL_CONTENT_TYPES),
+        allowed_information_categories: toAllowedList(allowedCategories, ALL_INFORMATION_CATEGORIES),
         template_name: templateName,
       });
       onCreated();
@@ -168,7 +252,7 @@ export function CreateRuleDialog({ templates, onCreated }: CreateRuleDialogProps
               </DialogTitle>
               <DialogDescription>Set the details for this access rule.</DialogDescription>
             </DialogHeader>
-            <div className="mt-4 space-y-4">
+            <div className="mt-4 max-h-[60vh] space-y-4 overflow-y-auto pr-1">
               <div className="space-y-2">
                 <Label htmlFor="grantee-name">Name</Label>
                 <Input
@@ -219,6 +303,30 @@ export function CreateRuleDialog({ templates, onCreated }: CreateRuleDialogProps
                   ))}
                 </div>
               </div>
+
+              <div className="space-y-2">
+                <p className="text-xs text-muted-foreground">
+                  {accessLevel === 'full'
+                    ? 'Full access shares everything below — narrow it down by switching to Read Only or Limited.'
+                    : 'Uncheck anything this person should not see. Leave everything checked for no restriction.'}
+                </p>
+              </div>
+
+              <CategoryCheckboxGroup
+                title="Content types"
+                options={CONTENT_TYPES}
+                selected={accessLevel === 'full' ? ALL_CONTENT_TYPES : allowedContentTypes}
+                onChange={setAllowedContentTypes}
+                disabled={accessLevel === 'full'}
+              />
+
+              <CategoryCheckboxGroup
+                title="Information categories"
+                options={INFORMATION_CATEGORIES}
+                selected={accessLevel === 'full' ? ALL_INFORMATION_CATEGORIES : allowedCategories}
+                onChange={setAllowedCategories}
+                disabled={accessLevel === 'full'}
+              />
 
               <div className="space-y-2">
                 <Label>Verification</Label>

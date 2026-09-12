@@ -9,7 +9,9 @@ import { ChatInput } from '@/components/chat/chat-input';
 import { ChallengeModal, LockoutScreen } from '@/components/chat/challenge-modal';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Badge } from '@/components/ui/badge';
-import { Bot, Wifi, WifiOff, Brain, AlertCircle, Clock } from 'lucide-react';
+import { Bot, Wifi, WifiOff, Brain, AlertCircle, Clock, Video, Phone } from 'lucide-react';
+import { Button } from '@/components/ui/button';
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import {
   useChatSocket,
   type ConnectionStatus,
@@ -151,9 +153,10 @@ export function ChatView({ ownerId }: ChatViewProps) {
 
   // Hydrate from IDB on mount — instant offline restore.
   useEffect(() => {
+    if (!resolvedOwnerId) return;
     let cancelled = false;
     (async () => {
-      const cached = await getMessages(threadId);
+      const cached = await getMessages(resolvedOwnerId, threadId);
       if (cancelled || cached.length === 0) return;
       cached.forEach((m) => lastPersistedRef.current.add(m.id));
       setMessages((prev) => {
@@ -169,8 +172,8 @@ export function ChatView({ ownerId }: ChatViewProps) {
     return () => {
       cancelled = true;
     };
-    // Re-hydrate when thread changes.
-  }, [threadId]);
+    // Re-hydrate when owner or thread changes.
+  }, [resolvedOwnerId, threadId]);
 
   // Persist any newly added (or updated streaming) messages.
   useEffect(() => {
@@ -344,10 +347,10 @@ export function ChatView({ ownerId }: ChatViewProps) {
 
   // Drain queued messages when we come back online or the WS reconnects.
   useEffect(() => {
-    if (onlineStatus !== 'online') return;
+    if (onlineStatus !== 'online' || !resolvedOwnerId) return;
     let cancelled = false;
     (async () => {
-      const result = await flushQueue(async (m) => {
+      const result = await flushQueue(resolvedOwnerId, async (m) => {
         // Prefer the WS path if available, fall back to REST.
         if (status === 'connected') {
           sendMessage(m.text, m.threadId ?? threadId);
@@ -365,7 +368,7 @@ export function ChatView({ ownerId }: ChatViewProps) {
     return () => {
       cancelled = true;
     };
-  }, [onlineStatus, status, sendMessage, threadId, haptic]);
+  }, [onlineStatus, status, sendMessage, threadId, haptic, resolvedOwnerId]);
 
   // Pre-fill from share-target redirect (?shared=...) and clear the URL param.
   useEffect(() => {
@@ -377,9 +380,10 @@ export function ChatView({ ownerId }: ChatViewProps) {
   // Listen to background-sync trigger from the service worker.
   useEffect(() => {
     if (typeof navigator === 'undefined' || !('serviceWorker' in navigator)) return;
+    if (!resolvedOwnerId) return;
     const handler = (event: MessageEvent) => {
       if (event.data?.type === 'flush-chat-queue') {
-        flushQueue(async (m) => {
+        flushQueue(resolvedOwnerId, async (m) => {
           await api.post('/api/chat/message', {
             message: m.text,
             thread_id: m.threadId ?? threadId ?? null,
@@ -389,7 +393,7 @@ export function ChatView({ ownerId }: ChatViewProps) {
     };
     navigator.serviceWorker.addEventListener('message', handler);
     return () => navigator.serviceWorker.removeEventListener('message', handler);
-  }, [threadId]);
+  }, [threadId, resolvedOwnerId]);
 
   function handleDeleteMessage(id: string) {
     setMessages((prev) => prev.filter((m) => m.id !== id));
@@ -493,19 +497,26 @@ export function ChatView({ ownerId }: ChatViewProps) {
     formData.append('file', file);
 
     const ext = file.name.split('.').pop()?.toLowerCase() ?? '';
+    // .webm covers both audio-only and video recordings, so extension alone
+    // can't disambiguate — check the MIME type first (both recorders set it
+    // correctly) and only fall back to extension when it's missing/generic.
     const audioExts = ['wav', 'mp3', 'm4a', 'ogg', 'flac', 'webm'];
-    const videoExts = ['mp4', 'mov', 'avi', 'mkv'];
+    const videoExts = ['mp4', 'mov', 'avi', 'mkv', 'webm'];
     const imageExts = ['jpg', 'jpeg', 'png', 'gif', 'webp', 'heic', 'heif'];
+
+    const isAudio = file.type ? file.type.startsWith('audio/') : audioExts.includes(ext);
+    const isVideo = file.type ? file.type.startsWith('video/') : videoExts.includes(ext);
+    const isImage = file.type ? file.type.startsWith('image/') : imageExts.includes(ext);
 
     let endpoint = '/api/knowledge/document';
     let label = 'document';
-    if (audioExts.includes(ext)) {
+    if (isAudio) {
       endpoint = '/api/knowledge/audio';
       label = 'audio file';
-    } else if (videoExts.includes(ext)) {
+    } else if (isVideo) {
       endpoint = '/api/knowledge/video';
       label = 'video';
-    } else if (imageExts.includes(ext)) {
+    } else if (isImage) {
       endpoint = '/api/knowledge/image';
       label = 'image';
     }
@@ -617,6 +628,10 @@ export function ChatView({ ownerId }: ChatViewProps) {
     handleFileAttach(file);
   }
 
+  function handleVoiceMessage(file: File) {
+    handleFileAttach(file);
+  }
+
   return (
     <div className="flex h-full flex-col">
       {/* Video call overlay */}
@@ -661,14 +676,41 @@ export function ChatView({ ownerId }: ChatViewProps) {
       )}
 
       {/* Status bar */}
-      <div className="flex items-center border-b px-4 py-2 gap-2">
-        <StatusIndicator status={status} />
-        {isLearning && (
-          <Badge variant="secondary" className="gap-1 text-xs">
-            <Brain className="h-3 w-3" />
-            Learning from you
-          </Badge>
-        )}
+      <div className="flex items-center justify-between border-b px-4 py-2 gap-2">
+        <div className="flex items-center gap-2">
+          <StatusIndicator status={status} />
+          {isLearning && (
+            <Badge variant="secondary" className="gap-1 text-xs">
+              <Brain className="h-3 w-3" />
+              Learning from you
+            </Badge>
+          )}
+        </div>
+
+        <div className="flex items-center gap-1">
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button variant="ghost" size="icon" className="h-9 w-9" disabled>
+                <Phone className="h-4 w-4" />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent>Voice call (coming soon)</TooltipContent>
+          </Tooltip>
+
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                variant="ghost"
+                size="icon"
+                className="h-9 w-9"
+                onClick={() => setVideoCallActive(true)}
+              >
+                <Video className="h-4 w-4" />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent>Video call</TooltipContent>
+          </Tooltip>
+        </div>
       </div>
 
       {/* Messages area */}
@@ -711,7 +753,7 @@ export function ChatView({ ownerId }: ChatViewProps) {
         onSend={handleSend}
         onFileAttach={handleFileAttach}
         onVoiceClip={handleVoiceClip}
-        onVideoCall={() => setVideoCallActive(true)}
+        onVoiceMessage={handleVoiceMessage}
         onVideoRecord={() => setVideoRecorderOpen(true)}
         disabled={(isTyping && !streamingMessageId) || !!lockoutMessage}
         initialText={sharedDraft}

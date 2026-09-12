@@ -1,8 +1,15 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["app*"]
+
 [project]
 name = "replica-ai-api"
 version = "0.1.0"
 description = "Replica AI — FastAPI backend"
-requires-python = ">=3.11"
+requires-python = ">=3.11,<3.13"  # pydub needs stdlib `audioop`, removed in 3.13
 dependencies = [
     "fastapi>=0.110.0",
     "uvicorn[standard]>=0.29.0",
@@ -36,6 +43,10 @@ dependencies = [
     "psutil>=5.9.0",
     "python-magic>=0.4.27",
     "cuid2>=2.0.0",
+    # face_recognition_models still imports pkg_resources at runtime, which
+    # setuptools removed entirely as of 81. Pin below that until upstream fixes it:
+    # https://github.com/ageitgey/face_recognition_models
+    "setuptools<81",
 ]
 
 [project.optional-dependencies]

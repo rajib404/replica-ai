@@ -159,6 +159,66 @@ class OllamaClient:
                 if line:
                     yield json.loads(line)
 
+    async def chat_completion(
+        self,
+        messages: list[dict[str, str]],
+        model: str | None = None,
+        temperature: float = 0.7,
+        max_tokens: int = 2048,
+    ) -> dict:
+        """Generate a complete (non-streaming) response via Ollama's chat API.
+
+        Unlike /api/generate (a raw text-completion endpoint), /api/chat takes
+        structured {role, content} turns and applies the model's own chat
+        template — this avoids the model echoing literal "User:"/"Assistant:"
+        labels back, which happens when turns are flattened into plain text.
+        """
+        client = await self._get_client()
+        payload: dict = {
+            "model": model or settings.ollama_default_model,
+            "messages": messages,
+            "stream": False,
+            "options": {
+                "temperature": temperature,
+                "num_predict": max_tokens,
+            },
+        }
+
+        resp = await client.post("/api/chat", json=payload)
+        resp.raise_for_status()
+        data = resp.json()
+        return {"response": data.get("message", {}).get("content", "")}
+
+    async def chat_completion_stream(
+        self,
+        messages: list[dict[str, str]],
+        model: str | None = None,
+        temperature: float = 0.7,
+        max_tokens: int = 2048,
+    ) -> AsyncGenerator[dict, None]:
+        """Stream a chat completion, yielding each token chunk as a dict."""
+        client = await self._get_client()
+        payload: dict = {
+            "model": model or settings.ollama_default_model,
+            "messages": messages,
+            "stream": True,
+            "options": {
+                "temperature": temperature,
+                "num_predict": max_tokens,
+            },
+        }
+
+        async with client.stream("POST", "/api/chat", json=payload, timeout=None) as resp:
+            resp.raise_for_status()
+            async for line in resp.aiter_lines():
+                if not line:
+                    continue
+                data = json.loads(line)
+                yield {
+                    "response": data.get("message", {}).get("content", ""),
+                    "done": data.get("done", False),
+                }
+
     # -- Embeddings --
 
     async def generate_embedding(self, text: str, model: str | None = None) -> list[float]:
@@ -167,7 +227,7 @@ class OllamaClient:
         resp = await client.post(
             "/api/embeddings",
             json={
-                "model": model or settings.ollama_default_model,
+                "model": model or settings.ollama_embedding_model,
                 "prompt": text,
             },
         )

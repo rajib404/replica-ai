@@ -8,6 +8,7 @@ from typing import Any
 
 import redis.asyncio as aioredis
 
+from app.core.config import settings
 from app.core.qdrant import QdrantService, get_qdrant
 from app.core.storage import FileStorage, get_storage
 from app.core.task_tracker import TaskStatus, update_task
@@ -32,13 +33,38 @@ def _get_whisper_model() -> Any:
                 "base",
                 device="cpu",
                 compute_type="int8",
-                download_root="/app/model_cache",
+                download_root=settings.whisper_model_cache_dir,
             )
             logger.info("faster-whisper model ready")
     return _whisper_model
 
 CHUNK_SIZE = 2000
 CHUNK_OVERLAP = 200
+
+# Fixed information-category taxonomy, mirrored in
+# apps/api/app/models/knowledge.py::InformationCategory and
+# packages/db/prisma/schema.prisma::InformationCategory — keep in sync.
+INFORMATION_CATEGORIES = (
+    "memories_stories",
+    "photos_videos",
+    "voice_recordings",
+    "health_medical",
+    "financial",
+    "legal_official",
+    "relationships_family",
+    "career_work",
+    "beliefs_values",
+    "traditions_recipes",
+    "advice_wisdom",
+    "general",
+)
+DEFAULT_CATEGORY = "general"
+
+CATEGORY_PROMPT_TEMPLATE = """\
+Classify the following personal content into exactly one category from this \
+list: {categories}. Output ONLY the category label, nothing else.
+
+Content: {content}"""
 
 
 class KnowledgeIngestor:
@@ -77,6 +103,33 @@ class KnowledgeIngestor:
         result = await self.ollama.generate_response(prompt, temperature=0.1)
         return result.get("response", text)
 
+    async def _classify_category(self, text: str) -> str:
+        """Best-effort zero-shot classification into INFORMATION_CATEGORIES.
+
+        Mirrors the rerank-call pattern in services/search.py: a short,
+        deterministic (temperature=0) completion, validated against the
+        fixed category set, falling back to DEFAULT_CATEGORY on no-match or
+        any failure — classification must never block ingestion.
+        """
+        if not text.strip():
+            return DEFAULT_CATEGORY
+        try:
+            prompt = CATEGORY_PROMPT_TEMPLATE.format(
+                categories=", ".join(INFORMATION_CATEGORIES),
+                content=text[:1000],
+            )
+            result = await self.ollama.generate_response(
+                prompt, temperature=0.0, max_tokens=8
+            )
+            raw = result.get("response", "").strip().lower()
+            raw = raw.strip(" .\"'`")
+            for category in INFORMATION_CATEGORIES:
+                if category in raw:
+                    return category
+            return DEFAULT_CATEGORY
+        except Exception:
+            return DEFAULT_CATEGORY
+
     async def _generate_and_store_embedding(
         self,
         text: str,
@@ -86,6 +139,7 @@ class KnowledgeIngestor:
         language: str,
         chunk_index: int = 0,
         content_preview: str | None = None,
+        category: str | None = None,
     ) -> str:
         vector = await self.ollama.generate_embedding(text)
         await self.qdrant.ensure_collection(vector_size=len(vector))
@@ -97,6 +151,7 @@ class KnowledgeIngestor:
             language=language,
             chunk_index=chunk_index,
             content_preview=content_preview,
+            category=category,
         )
         return point_id
 
@@ -188,6 +243,7 @@ class KnowledgeIngestor:
             english = text
 
         content_preview = english[:300]
+        category = await self._classify_category(english)
 
         embedding_id = await self._generate_and_store_embedding(
             text=english,
@@ -196,6 +252,7 @@ class KnowledgeIngestor:
             content_type="text",
             language=lang,
             content_preview=content_preview,
+            category=category,
         )
 
         return {
@@ -204,6 +261,7 @@ class KnowledgeIngestor:
             "english_translation": english if lang != "en" else None,
             "embedding_id": embedding_id,
             "content_preview": content_preview,
+            "category": category,
             "metadata": {"original_text": text[:500]},
         }
 
@@ -238,6 +296,7 @@ class KnowledgeIngestor:
                 english = await self._translate_to_english(text, lang)
 
             content_preview = english[:300]
+            category = await self._classify_category(english)
 
             await update_task(r, task_id, progress=80)
 
@@ -248,6 +307,7 @@ class KnowledgeIngestor:
                 content_type="audio",
                 language=lang,
                 content_preview=content_preview,
+                category=category,
             )
 
             await update_task(
@@ -260,6 +320,7 @@ class KnowledgeIngestor:
                     "english_translation": english if lang != "en" else None,
                     "embedding_id": embedding_id,
                     "content_preview": content_preview,
+                    "category": category,
                     "original_content_path": rel_path,
                     "metadata": {"filename": filename, "transcript": text[:500]},
                 },
@@ -316,6 +377,7 @@ class KnowledgeIngestor:
                 english = await self._translate_to_english(text, lang)
 
             content_preview = english[:300]
+            category = await self._classify_category(english)
 
             embedding_id = await self._generate_and_store_embedding(
                 text=english,
@@ -324,6 +386,7 @@ class KnowledgeIngestor:
                 content_type="video",
                 language=lang,
                 content_preview=content_preview,
+                category=category,
             )
 
             await update_task(
@@ -336,6 +399,7 @@ class KnowledgeIngestor:
                     "english_translation": english if lang != "en" else None,
                     "embedding_id": embedding_id,
                     "content_preview": content_preview,
+                    "category": category,
                     "original_content_path": rel_path,
                     "metadata": {
                         "filename": filename,
@@ -380,6 +444,7 @@ class KnowledgeIngestor:
 
             chunks = self._chunk_text(english)
             content_preview = english[:300]
+            category = await self._classify_category(english)
             first_embedding_id: str | None = None
 
             for i, chunk in enumerate(chunks):
@@ -391,6 +456,7 @@ class KnowledgeIngestor:
                     language=lang,
                     chunk_index=i,
                     content_preview=content_preview if i == 0 else None,
+                    category=category,
                 )
                 if i == 0:
                     first_embedding_id = eid
@@ -407,6 +473,7 @@ class KnowledgeIngestor:
                     "english_translation": english[:5000] if lang != "en" else None,
                     "embedding_id": first_embedding_id,
                     "content_preview": content_preview,
+                    "category": category,
                     "original_content_path": rel_path,
                     "metadata": {"filename": filename, "chunks": len(chunks), "chars": len(text)},
                 },
@@ -437,6 +504,12 @@ class KnowledgeIngestor:
             # Embed a descriptive text so the image is searchable by filename/type
             stem = Path(filename).stem.replace("_", " ").replace("-", " ")
             embed_text = f"photo image: {stem}"
+            # Images default straight to photos_videos rather than going through
+            # the classifier — the only available signal is the filename, which
+            # is too weak to reliably distinguish e.g. a scanned ID photo from
+            # a family snapshot, and misclassifying that split matters more
+            # than skipping the classification call entirely.
+            category = "photos_videos"
 
             embedding_id = await self._generate_and_store_embedding(
                 text=embed_text,
@@ -445,6 +518,7 @@ class KnowledgeIngestor:
                 content_type="image",
                 language="en",
                 content_preview=embed_text,
+                category=category,
             )
 
             await update_task(
@@ -457,6 +531,7 @@ class KnowledgeIngestor:
                     "english_translation": None,
                     "embedding_id": embedding_id,
                     "content_preview": embed_text,
+                    "category": category,
                     "original_content_path": rel_path,
                     "metadata": {"filename": filename},
                 },

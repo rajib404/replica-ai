@@ -51,3 +51,10 @@ coverage/
 .coverage
 htmlcov/
 .pytest_cache/
+
+# Runtime data (uploaded files, downloaded ML model weights) — regenerated
+# locally, never belongs in version control. The faster-whisper model alone
+# is >100MB, over GitHub's hard per-file limit.
+apps/ai/model_cache/
+apps/ai/storage/
+apps/api/storage/

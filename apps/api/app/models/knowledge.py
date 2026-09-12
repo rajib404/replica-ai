@@ -8,7 +8,6 @@ from sqlalchemy.orm import Mapped, mapped_column
 
 from app.models.owner import Base, _utcnow
 
-
 # ─── SQLAlchemy ──────────────────────────────────────────
 
 
@@ -18,6 +17,21 @@ class ContentType(str, enum.Enum):
     video = "video"
     image = "image"
     document = "document"
+
+
+class InformationCategory(str, enum.Enum):
+    memories_stories = "memories_stories"
+    photos_videos = "photos_videos"
+    voice_recordings = "voice_recordings"
+    health_medical = "health_medical"
+    financial = "financial"
+    legal_official = "legal_official"
+    relationships_family = "relationships_family"
+    career_work = "career_work"
+    beliefs_values = "beliefs_values"
+    traditions_recipes = "traditions_recipes"
+    advice_wisdom = "advice_wisdom"
+    general = "general"
 
 
 class KnowledgeEntry(Base):
@@ -32,6 +46,10 @@ class KnowledgeEntry(Base):
     original_language: Mapped[str | None] = mapped_column(String, nullable=True)
     english_translation: Mapped[str | None] = mapped_column(String, nullable=True)
     embedding_id: Mapped[str | None] = mapped_column(String, nullable=True)
+    category: Mapped[InformationCategory | None] = mapped_column(
+        Enum(InformationCategory, name="InformationCategory", create_type=False),
+        nullable=True,
+    )
     metadata_: Mapped[dict | None] = mapped_column("metadata", JSONB, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime, nullable=False, default=_utcnow, server_default=func.now()
@@ -74,6 +92,7 @@ class KnowledgeEntryResponse(BaseModel):
     original_language: str | None = None
     english_translation: str | None = None
     embedding_id: str | None = None
+    category: str | None = None
     metadata_: dict | None = Field(None, serialization_alias="metadata")
     created_at: datetime
 

@@ -15,6 +15,7 @@ class IngestResult(BaseModel):
     english_translation: str | None = None
     embedding_id: str | None = None
     content_preview: str | None = None
+    category: str | None = None
     original_content_path: str | None = None
     metadata: dict | None = None
 

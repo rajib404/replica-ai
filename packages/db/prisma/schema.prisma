@@ -34,6 +34,21 @@ enum AccessLevel {
   limited
 }
 
+enum InformationCategory {
+  memories_stories
+  photos_videos
+  voice_recordings
+  health_medical
+  financial
+  legal_official
+  relationships_family
+  career_work
+  beliefs_values
+  traditions_recipes
+  advice_wisdom
+  general
+}
+
 enum VerificationMethod {
   secret_word
   secret_event
@@ -115,6 +130,9 @@ model Owner {
   voiceProfileRef   String?  @map("voice_profile_ref")
   faceProfileRef    String?  @map("face_profile_ref")
   authSecretHash    String?  @map("auth_secret_hash")
+  passwordHash      String?  @map("password_hash")
+  googleId          String?  @unique @map("google_id")
+  familyCode        String?  @unique @map("family_code")
   createdAt         DateTime @default(now()) @map("created_at")
   updatedAt         DateTime @updatedAt @map("updated_at")
 
@@ -156,24 +174,25 @@ model ModelInstance {
   apiUrl          String?        @map("api_url")
   createdAt       DateTime       @default(now()) @map("created_at")
 
-  owner          Owner     @relation(fields: [ownerId], references: [id], onDelete: Cascade)
-  syncsAsSource  SyncLog[] @relation("SyncSource")
-  syncsAsTarget  SyncLog[] @relation("SyncTarget")
+  owner         Owner     @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+  syncsAsSource SyncLog[] @relation("SyncSource")
+  syncsAsTarget SyncLog[] @relation("SyncTarget")
 
   @@index([ownerId])
   @@map("model_instances")
 }
 
 model KnowledgeEntry {
-  id                  String      @id @default(cuid())
-  ownerId             String      @map("owner_id")
-  contentType         ContentType @map("content_type")
-  originalContentPath String?     @map("original_content_path")
-  originalLanguage    String      @default("en") @map("original_language")
-  englishTranslation  String?     @map("english_translation")
-  embeddingId         String?     @map("embedding_id")
-  metadata            Json?       @db.JsonB
-  createdAt           DateTime    @default(now()) @map("created_at")
+  id                  String               @id @default(cuid())
+  ownerId             String               @map("owner_id")
+  contentType         ContentType          @map("content_type")
+  originalContentPath String?              @map("original_content_path")
+  originalLanguage    String               @default("en") @map("original_language")
+  englishTranslation  String?              @map("english_translation")
+  embeddingId         String?              @map("embedding_id")
+  category            InformationCategory? @map("category")
+  metadata            Json?                @db.JsonB
+  createdAt           DateTime             @default(now()) @map("created_at")
 
   owner Owner @relation(fields: [ownerId], references: [id], onDelete: Cascade)
 
@@ -183,21 +202,23 @@ model KnowledgeEntry {
 }
 
 model AccessRule {
-  id                    String             @id @default(cuid())
-  ownerId               String             @map("owner_id")
-  granteeName           String             @map("grantee_name")
-  granteeRelation       String?            @map("grantee_relation")
-  accessLevel           AccessLevel        @default(limited) @map("access_level")
-  verificationMethod    VerificationMethod @default(none) @map("verification_method")
-  verificationValueHash String?            @map("verification_value_hash")
-  isActive              Boolean            @default(true) @map("is_active")
-  validFrom             DateTime?          @map("valid_from")
-  validUntil            DateTime?          @map("valid_until")
-  topicRestrictions     Json?              @map("topic_restrictions") @db.JsonB
-  timeRestrictions      Json?              @map("time_restrictions") @db.JsonB
-  templateName          String?            @map("template_name")
-  createdAt             DateTime           @default(now()) @map("created_at")
-  updatedAt             DateTime           @updatedAt @map("updated_at")
+  id                           String             @id @default(cuid())
+  ownerId                      String             @map("owner_id")
+  granteeName                  String             @map("grantee_name")
+  granteeRelation              String?            @map("grantee_relation")
+  accessLevel                  AccessLevel        @default(limited) @map("access_level")
+  verificationMethod           VerificationMethod @default(none) @map("verification_method")
+  verificationValueHash        String?            @map("verification_value_hash")
+  isActive                     Boolean            @default(true) @map("is_active")
+  validFrom                    DateTime?          @map("valid_from")
+  validUntil                   DateTime?          @map("valid_until")
+  topicRestrictions            Json?              @map("topic_restrictions") @db.JsonB
+  timeRestrictions             Json?              @map("time_restrictions") @db.JsonB
+  allowedContentTypes          Json?              @map("allowed_content_types") @db.JsonB
+  allowedInformationCategories Json?              @map("allowed_information_categories") @db.JsonB
+  templateName                 String?            @map("template_name")
+  createdAt                    DateTime           @default(now()) @map("created_at")
+  updatedAt                    DateTime           @updatedAt @map("updated_at")
 
   owner   Owner          @relation(fields: [ownerId], references: [id], onDelete: Cascade)
   invites FamilyInvite[]
@@ -282,7 +303,7 @@ model ExternalLLMConfig {
   createdAt         DateTime    @default(now()) @map("created_at")
   updatedAt         DateTime    @updatedAt @map("updated_at")
 
-  owner     Owner                @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+  owner     Owner                 @relation(fields: [ownerId], references: [id], onDelete: Cascade)
   usageLogs ExternalLLMUsageLog[]
 
   @@index([ownerId])
@@ -411,8 +432,8 @@ model SyncLog {
   startedAt        DateTime   @default(now()) @map("started_at")
   completedAt      DateTime?  @map("completed_at")
 
-  sourceInstance ModelInstance @relation("SyncSource", fields: [sourceInstanceId], references: [id], onDelete: Cascade)
-  targetInstance ModelInstance @relation("SyncTarget", fields: [targetInstanceId], references: [id], onDelete: Cascade)
+  sourceInstance ModelInstance  @relation("SyncSource", fields: [sourceInstanceId], references: [id], onDelete: Cascade)
+  targetInstance ModelInstance  @relation("SyncTarget", fields: [targetInstanceId], references: [id], onDelete: Cascade)
   conflicts      SyncConflict[]
 
   @@index([sourceInstanceId])
@@ -421,15 +442,15 @@ model SyncLog {
 }
 
 model SyncConflict {
-  id           String             @id @default(cuid())
-  syncLogId    String             @map("sync_log_id")
-  entryId      String             @map("entry_id")
-  entryType    String             @map("entry_type")
-  sourceData   Json               @map("source_data") @db.JsonB
-  targetData   Json               @map("target_data") @db.JsonB
-  resolution   ConflictResolution @default(pending)
-  resolvedAt   DateTime?          @map("resolved_at")
-  createdAt    DateTime           @default(now()) @map("created_at")
+  id         String             @id @default(cuid())
+  syncLogId  String             @map("sync_log_id")
+  entryId    String             @map("entry_id")
+  entryType  String             @map("entry_type")
+  sourceData Json               @map("source_data") @db.JsonB
+  targetData Json               @map("target_data") @db.JsonB
+  resolution ConflictResolution @default(pending)
+  resolvedAt DateTime?          @map("resolved_at")
+  createdAt  DateTime           @default(now()) @map("created_at")
 
   syncLog SyncLog @relation(fields: [syncLogId], references: [id], onDelete: Cascade)
 
@@ -488,19 +509,19 @@ model BrowseDomainRule {
 
   owner Owner @relation(fields: [ownerId], references: [id], onDelete: Cascade)
 
-  @@index([ownerId])
   @@unique([ownerId, domain])
+  @@index([ownerId])
   @@map("browse_domain_rules")
 }
 
 model BrowseConfig {
-  id              String   @id @default(cuid())
-  ownerId         String   @unique @map("owner_id")
-  enabled         Boolean  @default(true)
-  autoSummarize   Boolean  @default(true) @map("auto_summarize")
-  maxPagesPerDay  Int      @default(50) @map("max_pages_per_day")
-  createdAt       DateTime @default(now()) @map("created_at")
-  updatedAt       DateTime @updatedAt @map("updated_at")
+  id             String   @id @default(cuid())
+  ownerId        String   @unique @map("owner_id")
+  enabled        Boolean  @default(true)
+  autoSummarize  Boolean  @default(true) @map("auto_summarize")
+  maxPagesPerDay Int      @default(50) @map("max_pages_per_day")
+  createdAt      DateTime @default(now()) @map("created_at")
+  updatedAt      DateTime @updatedAt @map("updated_at")
 
   owner Owner @relation(fields: [ownerId], references: [id], onDelete: Cascade)
 
@@ -677,15 +698,15 @@ model AuditLog {
 }
 
 model TwoFactorAuth {
-  id                    String    @id @default(cuid())
-  ownerId               String    @unique @map("owner_id")
-  secretEncrypted       String    @map("secret_encrypted") @db.Text
-  backupCodesEncrypted  String?   @map("backup_codes_encrypted") @db.Text
-  enabled               Boolean   @default(false)
-  confirmedAt           DateTime? @map("confirmed_at")
-  lastUsedAt            DateTime? @map("last_used_at")
-  createdAt             DateTime  @default(now()) @map("created_at")
-  updatedAt             DateTime  @updatedAt @map("updated_at")
+  id                   String    @id @default(cuid())
+  ownerId              String    @unique @map("owner_id")
+  secretEncrypted      String    @map("secret_encrypted") @db.Text
+  backupCodesEncrypted String?   @map("backup_codes_encrypted") @db.Text
+  enabled              Boolean   @default(false)
+  confirmedAt          DateTime? @map("confirmed_at")
+  lastUsedAt           DateTime? @map("last_used_at")
+  createdAt            DateTime  @default(now()) @map("created_at")
+  updatedAt            DateTime  @updatedAt @map("updated_at")
 
   @@map("two_factor_auth")
 }

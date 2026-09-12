@@ -4,7 +4,7 @@
 
 ```bash
 cd apps/api
-python -m venv .venv
+python3.11 -m venv .venv  # 3.13 removed `audioop`, which pydub (voice chat) needs
 source .venv/bin/activate
 pip install -e ".[dev]"
 uvicorn app.main:app --reload --port 8000

@@ -10,7 +10,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.ai_client import AIServiceClient, get_ai_client
-from app.core.auth_guard import AuthContext, require_auth
+from app.core.auth_guard import AuthContext, require_auth, require_role
 from app.core.database import async_session, get_db
 from app.models.knowledge import (
     ContentType,
@@ -22,6 +22,7 @@ from app.models.knowledge import (
     TaskStatusResponse,
     TextIngestRequest,
 )
+from app.services.family_access import resolve_family_scope
 
 logger = logging.getLogger(__name__)
 
@@ -80,6 +81,7 @@ async def _auto_persist(ai: AIServiceClient, task_id: str, owner_id: str) -> Non
                 original_language=result.get("language"),
                 english_translation=result.get("english_translation"),
                 embedding_id=result.get("embedding_id"),
+                category=result.get("category"),
                 metadata_=result.get("metadata"),
             )
             db.add(entry)
@@ -121,7 +123,7 @@ class TranscribeResponse(BaseModel):
 @router.post("/transcribe", response_model=TranscribeResponse)
 async def transcribe_audio(
     file: UploadFile,
-    auth: AuthContext = Depends(require_auth),
+    auth: AuthContext = Depends(require_role("owner")),
     ai: AIServiceClient = Depends(get_ai_client),
 ) -> TranscribeResponse:
     """Transcribe an audio file and return the text + detected language."""
@@ -144,7 +146,7 @@ async def transcribe_audio(
 @router.post("/text", status_code=201, response_model=IngestCompletedResponse)
 async def ingest_text(
     body: TextIngestRequest,
-    auth: AuthContext = Depends(require_auth),
+    auth: AuthContext = Depends(require_role("owner")),
     ai: AIServiceClient = Depends(get_ai_client),
     db: AsyncSession = Depends(get_db),
 ) -> IngestCompletedResponse:
@@ -162,6 +164,7 @@ async def ingest_text(
         original_language=result.get("language"),
         english_translation=result.get("english_translation"),
         embedding_id=result.get("embedding_id"),
+        category=result.get("category"),
         metadata_=result.get("metadata"),
     )
     db.add(entry)
@@ -177,7 +180,7 @@ async def ingest_text(
 async def ingest_audio(
     file: UploadFile,
     background_tasks: BackgroundTasks,
-    auth: AuthContext = Depends(require_auth),
+    auth: AuthContext = Depends(require_role("owner")),
     ai: AIServiceClient = Depends(get_ai_client),
 ) -> IngestAcceptedResponse:
     _validate_extension(file.filename or "", AUDIO_EXTENSIONS, "audio")
@@ -201,7 +204,7 @@ async def ingest_audio(
 async def ingest_video(
     file: UploadFile,
     background_tasks: BackgroundTasks,
-    auth: AuthContext = Depends(require_auth),
+    auth: AuthContext = Depends(require_role("owner")),
     ai: AIServiceClient = Depends(get_ai_client),
 ) -> IngestAcceptedResponse:
     _validate_extension(file.filename or "", VIDEO_EXTENSIONS, "video")
@@ -225,7 +228,7 @@ async def ingest_video(
 async def ingest_document(
     file: UploadFile,
     background_tasks: BackgroundTasks,
-    auth: AuthContext = Depends(require_auth),
+    auth: AuthContext = Depends(require_role("owner")),
     ai: AIServiceClient = Depends(get_ai_client),
 ) -> IngestAcceptedResponse:
     _validate_extension(file.filename or "", DOC_EXTENSIONS, "document")
@@ -249,7 +252,7 @@ async def ingest_document(
 async def ingest_image(
     file: UploadFile,
     background_tasks: BackgroundTasks,
-    auth: AuthContext = Depends(require_auth),
+    auth: AuthContext = Depends(require_role("owner")),
     ai: AIServiceClient = Depends(get_ai_client),
 ) -> IngestAcceptedResponse:
     _validate_extension(file.filename or "", IMAGE_EXTENSIONS, "image")
@@ -316,6 +319,7 @@ async def get_task_status(
                     original_language=result.get("language"),
                     english_translation=result.get("english_translation"),
                     embedding_id=result.get("embedding_id"),
+                    category=result.get("category"),
                     metadata_=result.get("metadata"),
                 )
                 db.add(entry)
@@ -335,9 +339,19 @@ async def list_entries(
     auth: AuthContext = Depends(require_auth),
     db: AsyncSession = Depends(get_db),
 ) -> KnowledgeListResponse:
+    scope = await resolve_family_scope(auth, db)
     base_filter = KnowledgeEntry.owner_id == auth.subject_id
     if content_type is not None:
         base_filter = base_filter & (KnowledgeEntry.content_type == content_type)
+    if scope.allowed_content_types is not None:
+        base_filter = base_filter & (
+            KnowledgeEntry.content_type.in_(scope.allowed_content_types)
+        )
+    if scope.allowed_categories is not None:
+        base_filter = base_filter & (
+            KnowledgeEntry.category.in_(scope.allowed_categories)
+            | KnowledgeEntry.category.is_(None)
+        )
 
     total_result = await db.execute(
         select(func.count(KnowledgeEntry.id)).where(base_filter)
@@ -376,6 +390,12 @@ async def get_entry(
     entry = result.scalar_one_or_none()
     if entry is None:
         raise HTTPException(status_code=404, detail="Entry not found")
+
+    scope = await resolve_family_scope(auth, db)
+    entry_category = entry.category.value if entry.category else None
+    if not scope.permits(entry.content_type.value, entry_category):
+        raise HTTPException(status_code=403, detail="Not permitted to view this entry")
+
     return KnowledgeEntryResponse.model_validate(entry)
 
 
@@ -396,6 +416,12 @@ async def get_entry_file(
     entry = result.scalar_one_or_none()
     if entry is None:
         raise HTTPException(status_code=404, detail="Entry not found")
+
+    scope = await resolve_family_scope(auth, db)
+    entry_category = entry.category.value if entry.category else None
+    if not scope.permits(entry.content_type.value, entry_category):
+        raise HTTPException(status_code=403, detail="Not permitted to view this entry")
+
     if not entry.original_content_path:
         raise HTTPException(status_code=404, detail="No file for this entry")
 
@@ -418,7 +444,7 @@ async def get_entry_file(
 @router.delete("/entries/{entry_id}", status_code=204)
 async def delete_entry(
     entry_id: str,
-    auth: AuthContext = Depends(require_auth),
+    auth: AuthContext = Depends(require_role("owner")),
     ai: AIServiceClient = Depends(get_ai_client),
     db: AsyncSession = Depends(get_db),
 ) -> None:

@@ -2,13 +2,13 @@
 
 import json
 import logging
-import uuid
 
 import redis.asyncio as aioredis
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.ai_client import AIServiceClient
+from app.core.auth_guard import AuthContext
 from app.models.chat import (
     ConversationThread,
     Message,
@@ -17,6 +17,7 @@ from app.models.chat import (
 )
 from app.models.owner import AccessRule, LegacyConfig, Owner
 from app.services.conversation import ConversationManager
+from app.services.family_access import resolve_family_scope
 
 logger = logging.getLogger(__name__)
 
@@ -25,15 +26,52 @@ FAMILY_SESSION_PREFIX = "family:session:"
 FAMILY_SESSION_TTL = 3600  # 1 hour
 FAMILY_NOTIFY_CHANNEL = "family:notifications:{owner_id}"
 
+# Lower than the owner-chat default (0.7) — family chat is grounded Q&A about
+# someone else's life, not free conversation, so we bias hard toward sticking
+# to retrieved knowledge over fluent-sounding improvisation.
+FAMILY_CHAT_TEMPERATURE = 0.2
+
 FAMILY_SYSTEM_PROMPT = """\
 You are the AI replica of {owner_name}. \
-You are speaking with {grantee_name}, who is your {relation}. \
+IDENTITY — read carefully: the person typing to you right now is \
+{grantee_name}, {owner_name}'s {relation}. {grantee_name} is a family member \
+visiting this replica; {grantee_name} is NOT {owner_name}, and this is not a \
+conversation with {owner_name}. Do not confuse the two, do not address \
+{grantee_name} as though they were {owner_name}, and do not treat something \
+{grantee_name} says as a detail about {grantee_name}'s own life just because \
+it echoes something in {owner_name}'s knowledge. \
 Share memories and knowledge as {owner_name} would. \
 Speak {language}. \
+{access_instructions}\
 {topic_instructions}\
 Respond warmly and maintain {owner_name}'s personality. \
-If you don't have information, say so honestly rather than guessing. \
-Cite which memories you're drawing from by referencing their [Source N] tags."""
+Keep replies short and natural, the way a real person texts — a sentence or two \
+for most messages. Only go longer when asked for a story or detail. \
+Only state specific facts, names, places, events, or stories that literally \
+appear in the personal knowledge you're given — never invent or guess at \
+details to fill a gap, even plausible-sounding ones. If nothing in your \
+knowledge answers the question, say so honestly instead of improvising one. \
+When a photo, voice recording, document, or video in your knowledge matches \
+what's being asked about, say so and mention it plainly — the app shows it to \
+{grantee_name} as an attachment they can open, right below your reply. You \
+are text-based, so don't pretend to visually display or hold it yourself \
+(no "here's the photo" as if attaching it in the message itself) — just \
+describe what it is and that it's available below. Never describe the \
+contents of a photo or video beyond what's literally written about it in \
+your knowledge — you have no ability to actually see images. \
+The knowledge you're given is internally labeled with [Source N] tags for your \
+own reference only — never mention, cite, or repeat these labels in your replies."""
+
+FULL_ACCESS_INSTRUCTIONS = (
+    "{owner_name} granted {grantee_name} full access. Share what you know freely and "
+    "directly, including sensitive topics like finances, health, or personal matters — "
+    "don't hold back or add your own caution beyond what's explicitly blocked below. "
+)
+
+SCOPED_ACCESS_INSTRUCTIONS = (
+    "{owner_name} set specific boundaries on what can be shared, listed below — follow "
+    "those exactly rather than deciding on your own what seems too sensitive to share. "
+)
 
 LEGACY_ADDENDUM = """\
 Note: {owner_name} is no longer available in person. \
@@ -45,6 +83,18 @@ RESTRICTED_TOPIC_RESPONSE = (
     "{owner_name} preferred to keep that private. "
     "Is there something else I can share with you?"
 )
+
+# Appended last (after everything else, including the legacy addendum) so it
+# has the strongest recency weight right before generation — small local
+# models follow instructions near the end of the prompt far more reliably
+# than ones buried earlier in a long system message.
+GROUNDING_REMINDER = """\
+Reminder before you reply: if the personal knowledge below doesn't actually \
+answer this question, do not fill the gap with an invented name, date, \
+place, story, or any other specific-sounding detail — even a plausible one. \
+In that case just say something like "I don't have anything specific about \
+that" and, if it fits, invite {grantee_name} to tell you more. Never present \
+a guess as if it were something {owner_name} actually told you."""
 
 
 class FamilyConversationHandler:
@@ -63,6 +113,7 @@ class FamilyConversationHandler:
         relation: str | None,
         allowed_topics: list[str] | None,
         blocked_topics: list[str] | None,
+        access_level: str = "limited",
         legacy_mode: bool = False,
     ) -> str:
         # Build topic instructions
@@ -79,11 +130,19 @@ class FamilyConversationHandler:
             )
         topic_instructions = "".join(topic_parts) if topic_parts else ""
 
+        access_template = (
+            FULL_ACCESS_INSTRUCTIONS if access_level == "full" else SCOPED_ACCESS_INSTRUCTIONS
+        )
+        access_instructions = access_template.format(
+            owner_name=owner_name, grantee_name=grantee_name
+        )
+
         prompt = FAMILY_SYSTEM_PROMPT.format(
             owner_name=owner_name,
             grantee_name=grantee_name,
             relation=relation or "family member",
             language=language,
+            access_instructions=access_instructions,
             topic_instructions=topic_instructions,
         )
 
@@ -92,6 +151,11 @@ class FamilyConversationHandler:
                 owner_name=owner_name,
                 grantee_name=grantee_name,
             )
+
+        prompt += "\n" + GROUNDING_REMINDER.format(
+            owner_name=owner_name,
+            grantee_name=grantee_name,
+        )
 
         return prompt
 
@@ -190,6 +254,7 @@ class FamilyConversationHandler:
             relation=relation,
             allowed_topics=allowed_topics,
             blocked_topics=blocked_topics,
+            access_level=access_level,
             legacy_mode=legacy_active,
         )
 
@@ -210,12 +275,19 @@ class FamilyConversationHandler:
         # Load context
         context = await self._conv.load_context(thread.id, db, r)
 
+        # Resolve what this family member is allowed to retrieve/see
+        scope_auth = AuthContext(subject_id=owner_id, role="family_member", rule_id=rule_id)
+        scope = await resolve_family_scope(scope_auth, db)
+
         # Call AI RAG (non-streaming)
         rag_result = await ai.rag_generate(
             owner_id=owner_id,
             message=text,
             conversation_history=context,
             system_prompt=system_prompt,
+            allowed_content_types=scope.allowed_content_types,
+            allowed_categories=scope.allowed_categories,
+            temperature=FAMILY_CHAT_TEMPERATURE,
         )
         response_text = rag_result.get("response", "")
         sources = rag_result.get("sources", [])
@@ -320,6 +392,7 @@ class FamilyConversationHandler:
             relation=relation,
             allowed_topics=allowed_topics,
             blocked_topics=blocked_topics,
+            access_level=access_level,
             legacy_mode=legacy_active,
         )
 

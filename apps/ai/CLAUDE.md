@@ -6,7 +6,7 @@ Standalone FastAPI service that owns all AI/ML functionality: Ollama, Qdrant, em
 
 ```bash
 cd apps/ai
-python -m venv .venv
+python3 -m venv .venv
 source .venv/bin/activate
 pip install -e ".[dev]"
 uvicorn app.main:app --reload --port 8100

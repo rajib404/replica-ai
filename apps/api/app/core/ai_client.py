@@ -349,6 +349,9 @@ class AIServiceClient:
         conversation_history: list[dict[str, str]],
         system_prompt: str | None = None,
         model: str | None = None,
+        allowed_content_types: list[str] | None = None,
+        allowed_categories: list[str] | None = None,
+        temperature: float | None = None,
     ) -> dict:
         client = await self._get_client()
         resp = await client.post(
@@ -359,6 +362,9 @@ class AIServiceClient:
                 "conversation_history": conversation_history,
                 "system_prompt": system_prompt,
                 "model": model,
+                "allowed_content_types": allowed_content_types,
+                "allowed_categories": allowed_categories,
+                "temperature": temperature,
             },
         )
         resp.raise_for_status()
@@ -371,6 +377,9 @@ class AIServiceClient:
         conversation_history: list[dict[str, str]],
         system_prompt: str | None = None,
         model: str | None = None,
+        allowed_content_types: list[str] | None = None,
+        allowed_categories: list[str] | None = None,
+        temperature: float | None = None,
     ) -> AsyncGenerator[dict, None]:
         """Stream RAG response tokens from AI service SSE endpoint."""
         client = await self._get_client()
@@ -383,6 +392,9 @@ class AIServiceClient:
                 "conversation_history": conversation_history,
                 "system_prompt": system_prompt,
                 "model": model,
+                "allowed_content_types": allowed_content_types,
+                "allowed_categories": allowed_categories,
+                "temperature": temperature,
             },
             timeout=None,
         ) as resp:

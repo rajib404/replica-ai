@@ -1,4 +1,5 @@
 import { Settings } from 'lucide-react';
+import { AccountSection } from '@/components/settings/account-section';
 import { EnrollmentSection } from '@/components/settings/enrollment-section';
 
 export default function SettingsPage() {
@@ -16,6 +17,7 @@ export default function SettingsPage() {
         </div>
       </div>
 
+      <AccountSection />
       <EnrollmentSection />
     </div>
   );

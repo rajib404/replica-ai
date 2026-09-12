@@ -14,6 +14,7 @@ function makeProps(overrides: Partial<SetupData> = {}) {
     name: '',
     email: '',
     preferredLanguage: 'en',
+    password: '',
     verificationMethod: 'secret_word',
     secretValue: '',
     ...overrides,

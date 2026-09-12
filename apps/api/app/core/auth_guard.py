@@ -16,6 +16,10 @@ class AuthContext:
     subject_id: str  # owner_id
     role: str  # "owner" | "instance" | "family_member"
     instance_id: str | None = None
+    # Only set when role == "family_member" — the family session's scoping claims.
+    rule_id: str | None = None
+    access_level: str | None = None
+    grantee_name: str | None = None
 
 
 async def require_auth(
@@ -45,6 +49,9 @@ async def require_auth(
         subject_id=payload["sub"],
         role=payload.get("role", "owner"),
         instance_id=payload.get("instance_id"),
+        rule_id=payload.get("rule_id"),
+        access_level=payload.get("access_level"),
+        grantee_name=payload.get("grantee_name"),
     )
 
 

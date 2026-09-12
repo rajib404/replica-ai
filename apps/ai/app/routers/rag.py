@@ -57,6 +57,9 @@ async def rag_generate(body: RAGSearchRequest) -> RAGSearchResponse:
             conversation_history=body.conversation_history,
             system_prompt=body.system_prompt,
             model=body.model,
+            allowed_content_types=body.allowed_content_types,
+            allowed_categories=body.allowed_categories,
+            temperature=body.temperature if body.temperature is not None else 0.7,
         )
         return RAGSearchResponse(
             response=result["response"],
@@ -82,6 +85,9 @@ async def rag_stream(body: RAGStreamRequest) -> EventSourceResponse:
                 conversation_history=body.conversation_history,
                 system_prompt=body.system_prompt,
                 model=body.model,
+                allowed_content_types=body.allowed_content_types,
+                allowed_categories=body.allowed_categories,
+                temperature=body.temperature if body.temperature is not None else 0.7,
             ):
                 event_type = event.get("type", "token")
                 yield {"event": event_type, "data": json.dumps(event)}

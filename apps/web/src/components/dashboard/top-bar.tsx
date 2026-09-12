@@ -1,18 +1,39 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { RefreshCw } from 'lucide-react';
+import { useRouter } from 'next/navigation';
+import { LogOut, RefreshCw } from 'lucide-react';
 import { Avatar, AvatarFallback } from '@/components/ui/avatar';
+import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
+import { api } from '@/lib/api';
 import { useOnlineStatus, type OnlineStatus } from '@/lib/hooks/use-online-status';
 
 export function TopBar() {
+  const router = useRouter();
   const [ownerName, setOwnerName] = useState('');
+  const [signingOut, setSigningOut] = useState(false);
   const status = useOnlineStatus();
 
   useEffect(() => {
     setOwnerName(localStorage.getItem('owner_name') ?? 'Owner');
   }, []);
+
+  async function handleSignOut() {
+    setSigningOut(true);
+    const refreshToken = api.getRefreshToken();
+    try {
+      if (refreshToken) {
+        await api.post('/api/auth/logout', { refresh_token: refreshToken });
+      }
+    } catch {
+      // Best-effort revoke — sign the user out locally regardless.
+    } finally {
+      api.clearTokens();
+      localStorage.removeItem('owner_name');
+      router.push('/login');
+    }
+  }
 
   const initials = ownerName
     .split(' ')
@@ -55,6 +76,17 @@ export function TopBar() {
         <div className="flex items-center gap-2">
           <div className={cn('h-2.5 w-2.5 rounded-full', statusColor[status])} />
         </div>
+
+        <Button
+          variant="ghost"
+          size="icon"
+          className="h-8 w-8"
+          onClick={handleSignOut}
+          disabled={signingOut}
+          title="Sign out"
+        >
+          <LogOut className="h-4 w-4" />
+        </Button>
       </div>
     </header>
   );

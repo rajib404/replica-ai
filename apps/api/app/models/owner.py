@@ -101,6 +101,9 @@ class Owner(Base):
     voice_profile_ref: Mapped[str | None] = mapped_column(String, nullable=True)
     face_profile_ref: Mapped[str | None] = mapped_column(String, nullable=True)
     auth_secret_hash: Mapped[str | None] = mapped_column(String, nullable=True)
+    password_hash: Mapped[str | None] = mapped_column(String, nullable=True)
+    google_id: Mapped[str | None] = mapped_column(String, unique=True, nullable=True)
+    family_code: Mapped[str | None] = mapped_column(String, unique=True, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime, nullable=False, default=_utcnow, server_default=func.now()
     )
@@ -205,6 +208,8 @@ class AccessRule(Base):
     valid_until: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     topic_restrictions: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     time_restrictions: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    allowed_content_types: Mapped[list | None] = mapped_column(JSONB, nullable=True)
+    allowed_information_categories: Mapped[list | None] = mapped_column(JSONB, nullable=True)
     template_name: Mapped[str | None] = mapped_column(String, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime, nullable=False, default=_utcnow, server_default=func.now()

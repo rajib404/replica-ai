@@ -3,10 +3,14 @@ import uuid
 
 from qdrant_client import AsyncQdrantClient
 from qdrant_client.models import (
+    Condition,
     Distance,
     FieldCondition,
     Filter,
+    IsEmptyCondition,
+    MatchAny,
     MatchValue,
+    PayloadField,
     PayloadSchemaType,
     PointStruct,
     VectorParams,
@@ -62,7 +66,7 @@ class QdrantService:
         client = await self._get_client()
         collection_name = settings.qdrant_collection_name
 
-        for field in ("owner_id", "content_type"):
+        for field in ("owner_id", "content_type", "category"):
             try:
                 await client.create_payload_index(
                     collection_name=collection_name,
@@ -85,6 +89,7 @@ class QdrantService:
         language: str,
         chunk_index: int = 0,
         content_preview: str | None = None,
+        category: str | None = None,
     ) -> str:
         """Upsert a single embedding point. Returns the point UUID."""
         client = await self._get_client()
@@ -99,6 +104,8 @@ class QdrantService:
         }
         if content_preview is not None:
             payload["content_preview"] = content_preview
+        if category is not None:
+            payload["category"] = category
 
         await client.upsert(
             collection_name=settings.qdrant_collection_name,
@@ -128,16 +135,41 @@ class QdrantService:
         owner_id: str,
         limit: int = 10,
         content_type: str | None = None,
+        allowed_content_types: list[str] | None = None,
+        allowed_categories: list[str] | None = None,
     ) -> list[dict]:
-        """Filtered nearest-neighbor search scoped to an owner."""
+        """Filtered nearest-neighbor search scoped to an owner.
+
+        `content_type` is a single-value filter (existing behavior).
+        `allowed_content_types`/`allowed_categories` are multi-value
+        allow-lists (e.g. from a family access rule) — `None` means
+        unrestricted on that axis, an empty list matches nothing.
+        """
         client = await self._get_client()
 
-        must_conditions = [
+        must_conditions: list[Condition] = [
             FieldCondition(key="owner_id", match=MatchValue(value=owner_id))
         ]
         if content_type is not None:
             must_conditions.append(
                 FieldCondition(key="content_type", match=MatchValue(value=content_type))
+            )
+        if allowed_content_types is not None:
+            must_conditions.append(
+                FieldCondition(key="content_type", match=MatchAny(any=allowed_content_types))
+            )
+        if allowed_categories is not None:
+            # Points ingested before categorization existed (or where
+            # classification never ran) have no `category` payload key at
+            # all — treat those as always-visible, matching the Postgres-side
+            # policy, rather than silently hiding legacy content.
+            must_conditions.append(
+                Filter(
+                    should=[
+                        FieldCondition(key="category", match=MatchAny(any=allowed_categories)),
+                        IsEmptyCondition(is_empty=PayloadField(key="category")),
+                    ]
+                )
             )
 
         results = await client.query_points(

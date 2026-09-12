@@ -5,30 +5,117 @@ import io
 import logging
 import secrets
 import time
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
 import qrcode
-from sqlalchemy import func, select
+from redis.asyncio import Redis
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.auth_guard import AuthContext
 from app.core.config import settings
+from app.core.rate_limit import check_rate_limit, clear_attempts, record_attempt
 from app.core.security import create_access_token, hash_secret, verify_secret
 from app.models.family_access import (
     AccessRuleResponse,
     AccessTemplateResponse,
     CreateAccessRuleRequest,
+    FamilyLoginRequest,
     FamilySessionResponse,
     InviteResponse,
     LegacyConfigResponse,
 )
+from app.models.knowledge import KnowledgeEntry, KnowledgeEntryResponse
 from app.models.owner import (
     AccessLevel,
     AccessRule,
     FamilyInvite,
     LegacyConfig,
     LegacyTriggerType,
+    Owner,
     VerificationMethod,
 )
+
+
+@dataclass
+class FamilyScope:
+    """Resolved content permissions for a request. `None` on either field
+    means "unrestricted" on that axis — never an implicit empty-list deny.
+    """
+
+    allowed_content_types: list[str] | None
+    allowed_categories: list[str] | None
+
+    def permits(self, content_type: str | None, category: str | None) -> bool:
+        if self.allowed_content_types is not None:
+            if content_type not in self.allowed_content_types:
+                return False
+        if self.allowed_categories is not None and category is not None:
+            if category not in self.allowed_categories:
+                return False
+        return True
+
+
+UNRESTRICTED_SCOPE = FamilyScope(allowed_content_types=None, allowed_categories=None)
+
+
+async def resolve_family_scope(auth: AuthContext, db: AsyncSession) -> FamilyScope:
+    """Resolve what content an authenticated request may see.
+
+    Owners and instances always get the unrestricted scope (unchanged
+    behavior). A family_member session is scoped to its AccessRule: "full"
+    access level always means unrestricted regardless of any per-category
+    lists; otherwise the rule's explicit allow-lists apply (None = all,
+    matching today's behavior for rules created before this feature).
+    A family token whose rule no longer exists gets nothing, not everything.
+    """
+    if auth.role != "family_member":
+        return UNRESTRICTED_SCOPE
+
+    if not auth.rule_id:
+        return FamilyScope(allowed_content_types=[], allowed_categories=[])
+
+    result = await db.execute(select(AccessRule).where(AccessRule.id == auth.rule_id))
+    rule = result.scalar_one_or_none()
+    if rule is None:
+        return FamilyScope(allowed_content_types=[], allowed_categories=[])
+
+    if rule.access_level == AccessLevel.full:
+        return UNRESTRICTED_SCOPE
+
+    return FamilyScope(
+        allowed_content_types=rule.allowed_content_types,
+        allowed_categories=rule.allowed_information_categories,
+    )
+
+
+async def list_family_assets(
+    auth: AuthContext, db: AsyncSession
+) -> list[KnowledgeEntryResponse]:
+    """List the owner's knowledge entries a family session is allowed to see."""
+    scope = await resolve_family_scope(auth, db)
+
+    query = select(KnowledgeEntry).where(KnowledgeEntry.owner_id == auth.subject_id)
+    if scope.allowed_content_types is not None:
+        if not scope.allowed_content_types:
+            return []
+        query = query.where(KnowledgeEntry.content_type.in_(scope.allowed_content_types))
+    if scope.allowed_categories is not None:
+        if not scope.allowed_categories:
+            return []
+        query = query.where(
+            KnowledgeEntry.category.in_(scope.allowed_categories)
+            | KnowledgeEntry.category.is_(None)
+        )
+
+    result = await db.execute(query.order_by(KnowledgeEntry.created_at.desc()))
+    entries = list(result.scalars().all())
+    return [KnowledgeEntryResponse.model_validate(e) for e in entries]
+
+# Excludes visually ambiguous characters (0/O, 1/I/L) since this code is
+# meant to be read aloud, written down, or shared once and remembered.
+FAMILY_CODE_ALPHABET = "ABCDEFGHJKMNPQRSTUVWXYZ23456789"
 
 logger = logging.getLogger(__name__)
 
@@ -53,6 +140,12 @@ def _generate_qr_base64(url: str) -> str:
     return base64.b64encode(buffer.getvalue()).decode()
 
 
+def _generate_family_code() -> str:
+    part1 = "".join(secrets.choice(FAMILY_CODE_ALPHABET) for _ in range(4))
+    part2 = "".join(secrets.choice(FAMILY_CODE_ALPHABET) for _ in range(4))
+    return f"{part1}-{part2}"
+
+
 def _rule_to_response(rule: AccessRule) -> AccessRuleResponse:
     return AccessRuleResponse(
         id=rule.id,
@@ -66,6 +159,8 @@ def _rule_to_response(rule: AccessRule) -> AccessRuleResponse:
         valid_until=rule.valid_until,
         topic_restrictions=rule.topic_restrictions,
         time_restrictions=rule.time_restrictions,
+        allowed_content_types=rule.allowed_content_types,
+        allowed_information_categories=rule.allowed_information_categories,
         template_name=rule.template_name,
         created_at=rule.created_at,
         updated_at=rule.updated_at,
@@ -185,6 +280,8 @@ class FamilyAccessManager:
             valid_until=valid_until,
             topic_restrictions=request.topic_restrictions.model_dump() if request.topic_restrictions else None,
             time_restrictions=request.time_restrictions.model_dump() if request.time_restrictions else None,
+            allowed_content_types=request.allowed_content_types,
+            allowed_information_categories=request.allowed_information_categories,
             template_name=request.template_name,
         )
         db.add(rule)
@@ -249,11 +346,16 @@ class FamilyAccessManager:
         if "valid_until" in updates:
             rule.valid_until = updates["valid_until"]
         if "topic_restrictions" in updates:
-            tr = updates["topic_restrictions"]
-            rule.topic_restrictions = tr.model_dump() if tr else None
+            # `updates` is already the result of `.model_dump()` on the request
+            # (done by the router), so nested models have already been
+            # flattened to plain dicts here — don't call `.model_dump()` again.
+            rule.topic_restrictions = updates["topic_restrictions"]
         if "time_restrictions" in updates:
-            tr = updates["time_restrictions"]
-            rule.time_restrictions = tr.model_dump() if tr else None
+            rule.time_restrictions = updates["time_restrictions"]
+        if "allowed_content_types" in updates:
+            rule.allowed_content_types = updates["allowed_content_types"]
+        if "allowed_information_categories" in updates:
+            rule.allowed_information_categories = updates["allowed_information_categories"]
 
         await db.commit()
         await db.refresh(rule)
@@ -427,6 +529,132 @@ class FamilyAccessManager:
         await db.commit()
 
         # Create a scoped family member session token
+        session_token = create_access_token(
+            subject=rule.owner_id,
+            role="family_member",
+            extra={
+                "rule_id": rule.id,
+                "access_level": rule.access_level.value,
+                "grantee_name": rule.grantee_name,
+            },
+        )
+
+        return FamilySessionResponse(
+            verified=True,
+            message=f"Welcome, {rule.grantee_name}!",
+            session_token=session_token,
+            access_level=rule.access_level.value,
+            grantee_name=rule.grantee_name,
+            topic_restrictions=rule.topic_restrictions,
+            time_restrictions=rule.time_restrictions,
+        )
+
+    # ── Family Code (durable, non-expiring global entry point) ──
+
+    async def _assign_new_family_code(self, owner: Owner, db: AsyncSession) -> str:
+        for _ in range(5):
+            code = _generate_family_code()
+            existing = await db.execute(select(Owner).where(Owner.family_code == code))
+            if existing.scalar_one_or_none() is None:
+                owner.family_code = code
+                await db.commit()
+                return code
+        raise RuntimeError("Failed to generate a unique family code")
+
+    async def ensure_family_code(self, owner_id: str, db: AsyncSession) -> str:
+        """Return the owner's durable family code, generating one on first use."""
+        result = await db.execute(select(Owner).where(Owner.id == owner_id))
+        owner = result.scalar_one_or_none()
+        if not owner:
+            raise ValueError("Owner not found")
+        if owner.family_code:
+            return owner.family_code
+        return await self._assign_new_family_code(owner, db)
+
+    async def regenerate_family_code(self, owner_id: str, db: AsyncSession) -> str:
+        """Replace the owner's family code with a new one, invalidating the old one."""
+        result = await db.execute(select(Owner).where(Owner.id == owner_id))
+        owner = result.scalar_one_or_none()
+        if not owner:
+            raise ValueError("Owner not found")
+        return await self._assign_new_family_code(owner, db)
+
+    async def family_login(
+        self,
+        request: FamilyLoginRequest,
+        db: AsyncSession,
+        redis: Redis,
+    ) -> FamilySessionResponse:
+        """Public, code-based family sign-in — no invite link required.
+
+        Scoped by the owner's durable family code so a visitor can't attempt
+        name/secret guesses against the whole user base blind; rate-limited
+        per code to slow down guessing once a code is known.
+        """
+        now = _utcnow()
+        code = request.family_code.strip().upper()
+        rate_key = f"family_login:{code}"
+
+        allowed, wait_seconds = await check_rate_limit(redis, rate_key)
+        if not allowed:
+            return FamilySessionResponse(
+                verified=False,
+                message=f"Too many attempts. Try again in {wait_seconds} seconds.",
+            )
+
+        owner_result = await db.execute(select(Owner).where(Owner.family_code == code))
+        owner = owner_result.scalar_one_or_none()
+        if not owner:
+            await record_attempt(redis, rate_key)
+            return FamilySessionResponse(verified=False, message="Invalid family code.")
+
+        wanted_name = request.grantee_name.strip().lower()
+        rules_result = await db.execute(
+            select(AccessRule).where(
+                AccessRule.owner_id == owner.id,
+                AccessRule.is_active.is_(True),
+            )
+        )
+        candidates = rules_result.scalars().all()
+        rule = next(
+            (r for r in candidates if r.grantee_name.strip().lower() == wanted_name), None
+        )
+        if not rule:
+            await record_attempt(redis, rate_key)
+            return FamilySessionResponse(verified=False, message="No matching family member found.")
+
+        if rule.valid_until and now > rule.valid_until:
+            return FamilySessionResponse(verified=False, message="This access has expired.")
+
+        if rule.time_restrictions:
+            tr = rule.time_restrictions
+            days_map = {"mon": 0, "tue": 1, "wed": 2, "thu": 3, "fri": 4, "sat": 5, "sun": 6}
+            allowed_days = [days_map.get(d, -1) for d in tr.get("days", [])]
+            if now.weekday() not in allowed_days:
+                return FamilySessionResponse(
+                    verified=False, message="Access is not available at this time."
+                )
+            start_h, end_h = tr.get("start_hour", 0), tr.get("end_hour", 23)
+            if not (start_h <= now.hour <= end_h):
+                return FamilySessionResponse(
+                    verified=False, message="Access is not available at this hour."
+                )
+
+        secret_methods = (VerificationMethod.secret_word, VerificationMethod.secret_event)
+        if rule.verification_method in secret_methods:
+            if not rule.verification_value_hash or not verify_secret(
+                request.verification_value, rule.verification_value_hash
+            ):
+                await record_attempt(redis, rate_key)
+                return FamilySessionResponse(verified=False, message="Verification failed.")
+        else:
+            return FamilySessionResponse(
+                verified=False,
+                message="This family member's access method isn't supported here.",
+            )
+
+        await clear_attempts(redis, rate_key)
+
         session_token = create_access_token(
             subject=rule.owner_id,
             role="family_member",

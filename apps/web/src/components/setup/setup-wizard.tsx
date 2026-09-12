@@ -11,6 +11,7 @@ export interface SetupData {
   name: string;
   email: string;
   preferredLanguage: string;
+  password: string;
   verificationMethod: 'secret_word' | 'secret_event';
   secretValue: string;
 }
@@ -31,6 +32,7 @@ export function SetupWizard() {
     name: '',
     email: '',
     preferredLanguage: 'en',
+    password: '',
     verificationMethod: 'secret_word',
     secretValue: '',
   });

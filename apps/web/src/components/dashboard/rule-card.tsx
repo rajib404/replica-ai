@@ -10,6 +10,7 @@ import {
   Copy,
   Check,
   QrCode,
+  Pencil,
 } from 'lucide-react';
 import type { AccessRule } from '@replica-ai/shared';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -17,6 +18,8 @@ import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
 import { api } from '@/lib/api';
+import { EditAccessDialog } from './edit-access-dialog';
+import { CONTENT_TYPES, INFORMATION_CATEGORIES } from './create-rule-dialog';
 
 const ACCESS_COLORS: Record<string, string> = {
   full: 'bg-green-500/15 text-green-700 border-green-500/25',
@@ -46,13 +49,15 @@ interface RuleCardProps {
   rule: AccessRule;
   onToggle: (id: string, active: boolean) => void;
   onDelete: (id: string) => void;
+  onUpdated: () => void;
 }
 
-export function RuleCard({ rule, onToggle, onDelete }: RuleCardProps) {
+export function RuleCard({ rule, onToggle, onDelete, onUpdated }: RuleCardProps) {
   const [invite, setInvite] = useState<InviteResult | null>(null);
   const [inviteLoading, setInviteLoading] = useState(false);
   const [copied, setCopied] = useState(false);
   const [showQr, setShowQr] = useState(false);
+  const [editOpen, setEditOpen] = useState(false);
 
   const AccessIcon = rule.isActive ? ShieldCheck : ShieldOff;
 
@@ -124,6 +129,27 @@ export function RuleCard({ rule, onToggle, onDelete }: RuleCardProps) {
           </div>
         )}
 
+        {rule.accessLevel !== 'full' && (rule.allowedContentTypes || rule.allowedInformationCategories) && (
+          <div className="space-y-1">
+            {rule.allowedContentTypes && (
+              <p className="text-xs text-muted-foreground">
+                <span className="font-medium">Content:</span>{' '}
+                {rule.allowedContentTypes
+                  .map((v) => CONTENT_TYPES.find((c) => c.value === v)?.label ?? v)
+                  .join(', ') || 'none'}
+              </p>
+            )}
+            {rule.allowedInformationCategories && (
+              <p className="text-xs text-muted-foreground">
+                <span className="font-medium">Categories:</span>{' '}
+                {rule.allowedInformationCategories
+                  .map((v) => INFORMATION_CATEGORIES.find((c) => c.value === v)?.label ?? v)
+                  .join(', ') || 'none'}
+              </p>
+            )}
+          </div>
+        )}
+
         {rule.validUntil && (
           <p className="text-xs text-muted-foreground">
             Expires: {new Date(rule.validUntil).toLocaleDateString()}
@@ -169,6 +195,10 @@ export function RuleCard({ rule, onToggle, onDelete }: RuleCardProps) {
               {inviteLoading ? 'Generating...' : 'Generate Invite'}
             </Button>
           )}
+          <Button variant="outline" size="sm" onClick={() => setEditOpen(true)}>
+            <Pencil className="mr-1.5 h-3.5 w-3.5" />
+            Edit
+          </Button>
           <Button
             variant="outline"
             size="sm"
@@ -182,6 +212,13 @@ export function RuleCard({ rule, onToggle, onDelete }: RuleCardProps) {
           </Button>
         </div>
       </CardContent>
+
+      <EditAccessDialog
+        rule={rule}
+        open={editOpen}
+        onOpenChange={setEditOpen}
+        onSaved={onUpdated}
+      />
     </Card>
   );
 }

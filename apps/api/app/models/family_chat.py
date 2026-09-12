@@ -2,6 +2,7 @@ from datetime import datetime
 
 from pydantic import BaseModel, Field
 
+from app.models.knowledge import KnowledgeEntryResponse
 
 # ─── Family Chat Requests ────────────────────────────────
 
@@ -90,6 +91,14 @@ class FamilyAnalyticsResponse(BaseModel):
     members: list[FamilyMemberAnalytics]
     total_family_messages: int = 0
     total_family_sessions: int = 0
+
+
+# ─── Family Assets ───────────────────────────────────────
+
+
+class FamilyAssetListResponse(BaseModel):
+    entries: list[KnowledgeEntryResponse]
+    total: int
 
 
 # ─── WebSocket messages ──────────────────────────────────

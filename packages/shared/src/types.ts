@@ -81,6 +81,8 @@ export interface AccessRule {
   validUntil: string | null;
   topicRestrictions: TopicRestrictions | null;
   timeRestrictions: TimeRestrictions | null;
+  allowedContentTypes: string[] | null;
+  allowedInformationCategories: string[] | null;
   templateName: string | null;
   createdAt: string;
   updatedAt: string;

@@ -173,12 +173,89 @@ export default function SecurityPage() {
         </Card>
       )}
 
+      <PasswordCard />
       {encStatus && <EncryptionCard status={encStatus} />}
       {twoFAStatus && <TwoFactorCard status={twoFAStatus} onChange={refresh} />}
       <DataExportCard exports={exports} onChange={refresh} />
       <AuditLogCard log={auditLog} />
       <DangerZoneCard onDeleted={refresh} twoFAEnabled={twoFAStatus?.enabled ?? false} />
     </div>
+  );
+}
+
+// ─── Password ────────────────────────────────────────────
+
+function PasswordCard() {
+  const [currentPassword, setCurrentPassword] = useState('');
+  const [newPassword, setNewPassword] = useState('');
+  const [saving, setSaving] = useState(false);
+  const [message, setMessage] = useState<{ text: string; ok: boolean } | null>(null);
+
+  const save = async () => {
+    setSaving(true);
+    setMessage(null);
+    try {
+      const res = await api.put<{ success: boolean; message: string }>('/api/auth/password', {
+        current_password: currentPassword || null,
+        new_password: newPassword,
+      });
+      setMessage({ text: res.message, ok: res.success });
+      if (res.success) {
+        setCurrentPassword('');
+        setNewPassword('');
+      }
+    } catch (e) {
+      setMessage({ text: e instanceof Error ? e.message : 'Failed to update password', ok: false });
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2">
+          <KeyRound className="h-5 w-5" /> Password
+        </CardTitle>
+      </CardHeader>
+      <CardContent className="space-y-4 text-sm">
+        <div className="grid gap-3 sm:grid-cols-2">
+          <div className="space-y-1.5">
+            <Label htmlFor="current-password">Current password</Label>
+            <Input
+              id="current-password"
+              type="password"
+              value={currentPassword}
+              onChange={(e) => setCurrentPassword(e.target.value)}
+              placeholder="Leave blank if you haven't set one yet"
+              autoComplete="current-password"
+            />
+          </div>
+          <div className="space-y-1.5">
+            <Label htmlFor="new-password">New password</Label>
+            <Input
+              id="new-password"
+              type="password"
+              value={newPassword}
+              onChange={(e) => setNewPassword(e.target.value)}
+              placeholder="At least 8 characters"
+              autoComplete="new-password"
+            />
+          </div>
+        </div>
+
+        {message && (
+          <p className={cn('text-xs', message.ok ? 'text-green-700' : 'text-red-600')}>
+            {message.text}
+          </p>
+        )}
+
+        <Button onClick={save} size="sm" disabled={saving || newPassword.trim().length < 8}>
+          {saving && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
+          {currentPassword ? 'Change password' : 'Set password'}
+        </Button>
+      </CardContent>
+    </Card>
   );
 }
 

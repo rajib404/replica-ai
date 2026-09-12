@@ -4,7 +4,10 @@ import { openDB, type DBSchema, type IDBPDatabase } from 'idb';
 import type { ChatMessage } from '@/components/chat/message-bubble';
 
 const DB_NAME = 'replica-pwa';
-const DB_VERSION = 1;
+// v2: `messages` gained an `by-owner` index and the store is wiped on upgrade —
+// v1 read every cached message regardless of which owner it belonged to,
+// leaking chat history between different owners signed into the same browser.
+const DB_VERSION = 2;
 
 export interface CachedChatMessage extends Omit<ChatMessage, 'timestamp'> {
   threadId?: string;
@@ -47,6 +50,7 @@ interface ReplicaDb extends DBSchema {
     indexes: {
       'by-thread': string;
       'by-timestamp': number;
+      'by-owner': string;
     };
   };
   'queued-messages': {
@@ -74,11 +78,18 @@ function getDb(): Promise<IDBPDatabase<ReplicaDb>> {
   }
   if (!dbPromise) {
     dbPromise = openDB<ReplicaDb>(DB_NAME, DB_VERSION, {
-      upgrade(db) {
+      upgrade(db, oldVersion) {
+        // v1 cached messages from every owner in one unscoped store. Rather
+        // than try to backfill ownership on old rows, drop and recreate it —
+        // it's a cache; the server remains the source of truth.
+        if (oldVersion < 2 && db.objectStoreNames.contains('messages')) {
+          db.deleteObjectStore('messages');
+        }
         if (!db.objectStoreNames.contains('messages')) {
           const store = db.createObjectStore('messages', { keyPath: 'id' });
           store.createIndex('by-thread', 'threadId');
           store.createIndex('by-timestamp', 'timestamp');
+          store.createIndex('by-owner', 'ownerId');
         }
         if (!db.objectStoreNames.contains('queued-messages')) {
           db.createObjectStore('queued-messages', { keyPath: 'id' });
@@ -91,6 +102,12 @@ function getDb(): Promise<IDBPDatabase<ReplicaDb>> {
           db.createObjectStore('push-subscription', { keyPath: 'id' });
         }
       },
+      blocking() {
+        // Another tab is waiting to upgrade (e.g. after a deploy bumped
+        // DB_VERSION). Close our connection so it isn't stuck waiting on us.
+        dbPromise?.then((db) => db.close());
+        dbPromise = null;
+      },
     });
   }
   return dbPromise;
@@ -98,13 +115,15 @@ function getDb(): Promise<IDBPDatabase<ReplicaDb>> {
 
 // ── Messages ─────────────────────────────────────────────────────────────
 
-export async function getMessages(threadId?: string): Promise<ChatMessage[]> {
+export async function getMessages(ownerId: string, threadId?: string): Promise<ChatMessage[]> {
+  if (!ownerId) return [];
   try {
     const db = await getDb();
-    const all = threadId
+    const candidates = threadId
       ? await db.getAllFromIndex('messages', 'by-thread', threadId)
-      : await db.getAll('messages');
-    return all
+      : await db.getAllFromIndex('messages', 'by-owner', ownerId);
+    return candidates
+      .filter((m) => m.ownerId === ownerId)
       .sort((a, b) => a.timestamp - b.timestamp)
       .map(({ ownerId: _ownerId, threadId: _threadId, timestamp, ...rest }) => ({
         ...rest,

@@ -28,6 +28,13 @@ class Settings(BaseSettings):
     connect_token_expire_minutes: int = 60
     bcrypt_cost: int = 12
 
+    # Google OAuth sign-in
+    google_client_id: str = ""
+    google_client_secret: str = ""
+    google_redirect_uri: str = "http://localhost:8000/api/auth/google/callback"
+    # Where to send the browser after a successful Google sign-in
+    web_app_url: str = "http://localhost:3000"
+
     # Voice verification
     voice_similarity_threshold: float = 0.75
     voice_min_samples: int = 3
