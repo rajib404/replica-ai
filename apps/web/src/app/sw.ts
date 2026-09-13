@@ -40,6 +40,19 @@ const serwist = new Serwist({
     ],
   },
   runtimeCaching: [
+    // Auth redirects reached via a top-level navigation — e.g. the Google
+    // OAuth redirect lands on /api/auth/google/callback as a full-page
+    // navigation, not a fetch/XHR, so request.mode === 'navigate' below
+    // would otherwise catch it too. These are one-time-use,
+    // security-sensitive redirects (auth codes, CSRF state tokens) that
+    // must never be intercepted, retried, or cached by the service worker.
+    // Must come before the 'navigate' rule since Workbox matches routes
+    // in order; scoped to /api/auth/ specifically so it doesn't shadow the
+    // /api/knowledge/entries caching rule below.
+    {
+      matcher: ({ url }) => url.pathname.startsWith('/api/auth/'),
+      handler: new NetworkOnly(),
+    },
     // HTML navigations — NetworkFirst with 3s timeout, fallback to offline page.
     {
       matcher: ({ request }) => request.mode === 'navigate',
